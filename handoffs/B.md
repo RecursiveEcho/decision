@@ -99,3 +99,9 @@ E 指出 C 适配器仅接受已有设备凭据，旧空状态提示导致用户
 ### 8088生产部署复验（2026-11-04 19:10 +08:00）
 
 E部署90283a3后，B使用独立生产测试页验证1280px深滚动、390px窄屏，点击新建后标题focused=true/visible=true、表单数量1；取消正常。合成问题89c49d46-8420-4074-99a2-b3d3b5702a0d在真实列表中恰好1条，标题回读正确。网络记录仅登录POST，无新增问题或其他业务写入；未操作用户标签页，测试页已关闭。已通知E可交用户刷新试用，无新增代码变更。
+
+## 用户试用窗口恢复（2026-11-04）
+
+用户截图的左侧390px窄条来自B遗留的Playwright移动视口，不是网页CSS故障。独立只读审查确认：仅B所属decision-b-final单tab受影响，outerWidth1800而innerWidth390。普通新增CDP会话清除未生效；最终通过原主frame会话清除Emulation metrics，并移除该测试上下文的viewport/emulatedSize缓存，page.viewportSize()为null。没有固定为另一宽度、没有关闭页面或改动登录/业务数据。
+
+恢复后inner/client/visualViewport宽度均1200，main960，mobile媒体查询false；桌面导航和主区域截图目视正常。截图留在本机忽略目录web/output/playwright/restored-native-desktop-synthetic.png，不提交。page/context路由拦截均0；真实只读GET /api/v1/status返回200，model configured=true、lastCallStatus=succeeded、Wiki status=synced。未新增模型调用，不将状态读取充作新一轮模型/Wiki正文验收。已告知E可继续用户试用。
