@@ -118,3 +118,34 @@ A 至少建立 problems、sources、messages、jobs、memories（含 revision hi
 - 本轮整理在对话正文自然呈现；不自动写回goal/constraints/unknowns或本人记忆，不因此新增事实判定机制。可选信息与既有工具折叠保留，不能阻挡开聊。
 - 前端需区分未确定HTTP结果、已创建且Job在途、Job失败。首次发送稳定保存同一content/key快照，跨点击重试同payload同key；已拿到202后复用同problem和Job，不重POST创建。刷新可恢复已知Job轮询；退出清除本轮暂存。模型失败用“重试回答”调用新retry接口，正常重试不复制用户气泡；上下文已变更时明确保留原话供用户调整，不能让旧事实复活。
 - 202外层结构在首句返回后即用于选择问题/展示首条用户话；Job完成后刷新problems+messages获取自动标题和回答。所有写入仍只由本人点击发送/重试或既有显式操作触发，不自动确认决定/发通知/开采集。
+
+
+## 2026-11-04 图片、文档与思考等级（本轮固定契约）
+
+用户明确要求图片输入、文件上传和思考等级。下列为新增可选字段，旧纯文字请求继续兼容；是否部署以PROJECT_STATE为准。
+
+- `POST /conversations`、`POST /problems/{id}/messages`：`{content,attachments?:[{name,dataUrl}],thinking?:"off"|"low"|"high"|"max"}`。content允许空，文字或至少一个附件必需；文字仍最多12000字符。已有sourceIds逻辑不变。
+- 附件最多4个，原件每个最多8 MiB、合计16 MiB；请求体上限24 MiB。客户端/服务端均限制，服务端不能只依赖Nginx。其他后端请求仍1 MiB上限。
+- 图片wire格式PNG/JPEG；客户端接受WebP时先规范化为PNG/JPEG。实际图片内容校验，边长最多4096、总像素最多12M。文档支持PDF/DOCX/XLSX/TXT/MD/CSV，实际格式与名称共同核实，不执行宏、公式、外部实体或链接。
+- 选择/粘贴/拖入仅在本地预览，显式发送才上传。原件PG bytea独立保存并随消息/Job同事务提交，不添加独立临时上传流程。幂等hash包含原件、名称、顺序及thinking，重放不复制消息/附件。
+- `Message.attachments?` 返回元信息数组：`{id,name,mimeType,size,kind:"image"|"document",width?,height?,status:"pending"|"processing"|"ready"|"partial"|"failed",error:null|{code,message,retryable},coverage:{pages?,processedPages?,truncated:boolean,notice?:string}}`。旧消息可缺省。`Message.thinking`为四枚举之一，旧消息默认off；助手消息可回查该次档位。
+- `GET /attachments/{id}`：owner认证，返回原文件二进制及正确Content-Type、nosniff、Cache-Control:no-store；文件使用安全Content-Disposition，不允许device读取，不把token放URL。前端认证fetch后Blob URL展示/下载，退出回收。
+- 消息GET动态附加最新解析状态；pending/processing的`coverage.truncated=false`只代表尚未处理，不是已完整读完。解析失败使当前chat Job失败，保留原件/消息；retry复用附件ID和档位。坏格式、加密、超安全限等error.retryable=false，进程超时等true，不无限自动重试。
+- 文档解析在Worker与数据库锁外执行，采用可销毁的受限子进程、256 MiB heap、20s墙钟与临时文件清理。PDF最多前20页文字、其中至多3页需视觉的扫描页；每文档最多32000字符。PDF混合文字与扫描页按页处理。DOCX正文/表格、XLSX工作表/单元格可读，不承诺完整图表或嵌入图理解。截断用partial+coverage.notice同时告知模型和用户，不静默冒充全文。
+- 附件作为不可信对话输入，图片使用真实`image_url`内容块；文件文字附名称/页码或工作表定位。当前附件优先且不得静默丢弃，历史限本问题同revision最近12消息并有大小预算；省略旧附件须有说明。模型完整payload控制在40 MiB内。附件不会自行转换成来源/知识主题或用户事实，不能伪造文本Source.quote。
+- UI档位：快速off、轻度low、深度high、最高max，默认off。off=`thinking.disabled`；其余=`thinking.enabled`+`reasoning_effort`对应值。最大输出/超时分别为4000/60s、8000/120s、16000/180s、32000/240s。保留实际用量/推理长度，不保存或回传完整reasoning_content。前端可等待360s，仍running时继续查询而非重发。
+- 草稿与待发送原件使用登录会话localId隔离的IndexedDB；完整不可变快照及幂等key持久化成功才POST，存储失败不发。未知HTTP结果重用原bytes/顺序/档位/key；已获202复用原Job查询。退出清理会话附件与Blob URL，晚到响应不得恢复到新登录态。
+
+## 2026-11-04 自动记忆与明确决定（后续用户授权，覆盖旧禁止自动记录条款）
+
+本节只覆盖旧文中聊天不得写记忆/决定及手填确认前置的限制；不改变采集默认关闭、禁止自动通知、不得替用户作决定等边界。
+
+- 借鉴 Mem0 v1.0.0 的用户事实提取、检索及 ADD/UPDATE/DELETE/NONE 更新方法，使用现有 Java/PostgreSQL 与当前聊天模型调用实现，不代表集成 Mem0 SDK。新原话中明确的稳定个人事实/偏好可自动记为 global，临时条件限定 problem。旧记忆默认 problem，不批量升级全局。
+- 模型内部可选 `memoryActions:[{action:"ADD"|"UPDATE"|"DELETE"|"NONE",content?,scope?:"global"|"problem",targetId?,expectedRevision?,sourceQuote}]`，最多5项。服务端绑定当前 userMessageId；sourceQuote 必须为当前用户原始文本连续片段。只记本人实际陈述，排除假设、转述、第三人、引用、附件及助手生成的个人事实，kind 保持 user_reported。
+- UPDATE/DELETE 只可针对当前检索提供的自动记忆 ID 与 revision，不自动覆盖旧手填记录。以消息/action去重，保存墓碑与来源顺序；旧 Job/重试不能复活已忘记内容，只有后续用户重新明确陈述才能成为新版本。最终写入与回答保存同事务，自动记忆更新不 bump 全局对话 revision 或导致当前助手回答失效。
+- `Memory` 增加 `scope,origin:"chat",sourceMessageId,sourceQuote`，保留 id/content/status/revision/problemId。`GET /memories` 无 problemId 返回全部；指定 problemId 返回本问题与 global。`PATCH/DELETE /memories/{id}` 继续允许本人纠正/忘记，须防在途旧 Job 复活。
+- 检索 active 本问题与 global：中文二元组、英文词做本地相关性排序，再考虑近期，相关项最多12，加少量稳定全局候选总计不超过16。是词法检索，不宣称向量语义召回。
+- 助手 `Message.memoryChanges?=[{action:"ADD"|"UPDATE"|"DELETE",memoryId,content,scope,revision}]` 仅包含实际写入成功项；无效候选不阻塞正常回复，不显示成功提示。前端只需小型可展开状态与出处；记忆页用于查看、纠正、忘记，不要求事先填写。
+- 模型内部可选 `decisionCandidate:{choice,quote,rationale?,expectedOutcome?,supersedesId?}`。quote 必须是当前用户原话连续片段，choice 是 quote 连续片段；只记录明确选择/承诺，不记录疑问、犹豫、假设、第三人或助手建议。未明确给出的理由和预期留空。
+- 自动 Decision 新增 `origin:"chat",userMessageId,quote,status:"active"|"superseded",supersedesId?`。唯一 userMessageId，并发/重试去重；仅可替代同问题旧自动决定，不改旧手填决定。旧 Job 不得覆盖更新的选择。
+- 助手 `Message.decisionRecord?` 返回实际持久化的 Decision。前端可简短显示“已记录”，不增加必须手填的决定表。自动保存只整理用户已表达的事实和选择，不代做选择。
