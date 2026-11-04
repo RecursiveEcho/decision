@@ -69,6 +69,24 @@ export interface Memory {
   sourceMessageId?: string;
   sourceQuote?: string;
 }
+export interface MemoryOverviewItem {
+  summary: string;
+  scope: "global" | "problem";
+  problemId: string | null;
+  memoryRefs: { id: string; revision: number }[];
+}
+export interface MemoryOverview {
+  status: "empty" | "missing" | "pending" | "ready" | "failed";
+  fingerprint: string;
+  items: MemoryOverviewItem[];
+  jobId: string | null;
+  error: { code: string; message: string; retryable: boolean } | null;
+  coverage: {
+    eligibleCount: number;
+    consideredCount: number;
+    truncated: boolean;
+  };
+}
 export interface Topic {
   id: string;
   problemId: string;

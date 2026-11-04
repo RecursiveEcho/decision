@@ -1,6 +1,7 @@
 import type { Job } from "./types";
 import { clearChatSession } from "./chatStorage";
 import { clearMediaSession, purgeExpiredMedia } from "./mediaStorage";
+import { OVERVIEW_STORAGE } from "./overviewStorage";
 const SESSION = "decision.session";
 let sessionRequests = new AbortController();
 export class ApiError extends Error {
@@ -25,6 +26,7 @@ export function token(): string {
   }
 }
 export function setSession(s: { accessToken: string; expiresAt: string }) {
+  sessionStorage.removeItem(OVERVIEW_STORAGE);
   clearLocalMedia();
   clearChatSession();
   sessionStorage.setItem(
@@ -64,6 +66,7 @@ export function sessionId(): string {
   return s.localId;
 }
 export function logout() {
+  sessionStorage.removeItem(OVERVIEW_STORAGE);
   sessionRequests.abort();
   clearLocalMedia();
   sessionRequests = new AbortController();

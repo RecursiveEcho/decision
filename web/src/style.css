@@ -1312,3 +1312,99 @@ summary {
     width: 180px;
   }
 }
+.memory-detail {
+  padding: 12px 0 4px;
+}
+.memory-detail + .memory-detail {
+  border-top: 1px solid var(--line);
+  margin-top: 14px;
+}
+.memory-context {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0 0 10px;
+}
+.memory-quote {
+  margin: 12px 0;
+  padding-left: 12px;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.memory-quote small {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+}
+.memory-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+}
+.memory-actions button {
+  background: transparent;
+  color: var(--muted);
+  padding: 5px 8px;
+  border: 0;
+  font-size: 13px;
+}
+.memory-actions button:hover {
+  background: #f5f6f5;
+  color: #202a28;
+}
+.memory-page {
+  max-width: 780px;
+  margin: 0 auto;
+}
+.memory-page h2 {
+  margin-bottom: 10px;
+}
+.memory-intro {
+  margin-bottom: 28px;
+}
+.memory-highlight {
+  border-bottom: 1px solid var(--line);
+}
+.memory-highlight > summary {
+  padding: 18px 0;
+  cursor: pointer;
+}
+.memory-highlight > summary > span {
+  font-size: 16px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.memory-highlight > summary > small {
+  display: block;
+  margin: 7px 0 0 17px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.memory-all {
+  margin-top: 28px;
+  color: var(--muted);
+}
+.memory-all > summary {
+  cursor: pointer;
+  font-size: 13px;
+}
+.memory-raw {
+  margin-top: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  color: #34493c;
+}
+.memory-raw > summary {
+  cursor: pointer;
+  font-size: 13px;
+}
+.memory-coverage {
+  font-size: 12px;
+  margin-top: 16px;
+}
+.memory-state {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 22px 0;
+}
