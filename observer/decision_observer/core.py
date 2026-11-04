@@ -36,6 +36,27 @@ def valid_url(url, local_only=False):
     return url.rstrip('/')
 
 
+def validate_config(config, observation_required=True):
+    required = ['backendUrl', 'deviceId', 'deviceToken']
+    if observation_required:
+        required += ['pensieveUrl', 'pensieveTimezone', 'libraryId', 'folderId']
+    if any(key not in config for key in required):
+        raise ObserverError('Missing configuration; run full configure before observation' if observation_required
+                            else 'Missing notification configuration; run configure --notifications-only')
+    valid_url(config['backendUrl'])
+    uuid.UUID(config['deviceId'])
+    if not config['deviceToken'] or any(c in config['deviceToken'] for c in '\r\n'):
+        raise ObserverError('Scoped device token required')
+    if observation_required:
+        valid_url(config['pensieveUrl'], True)
+        ZoneInfo(config['pensieveTimezone'])
+        for key in ('libraryId', 'folderId'):
+            config[key] = int(config[key])
+            if config[key] < 1:
+                raise ObserverError('Library/folder IDs must be positive')
+    return config
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise ObserverError('Redirect refused')
@@ -207,7 +228,7 @@ class Runner:
     def __init__(self, config, store, problem, api=None, source=None, notifier=notify):
         self.config, self.store, self.problem = config, store, problem
         self.api = api or Http(config['backendUrl'], config['deviceToken'])
-        self.source = source or Pensieve(config)
+        self.source = source
         self.notifier = notifier
         self.since = datetime.now(timezone.utc)
         self.consent = False
@@ -238,6 +259,8 @@ class Runner:
         self.flush()
         if not self.allowed():
             raise ObserverError('Consent expired')
+        if self.source is None:
+            self.source = Pensieve(self.config)
         entities = self.source.read(self.since)
         ids = {int(e['id']) for e in entities}
         if self.pending_ocr - ids:
@@ -355,6 +378,8 @@ class Runner:
         self.delivery_cursor = response.get('nextCursor')
 
     def run(self, resume=False):
+        validate_config(self.config, observation_required=True)
+        uuid.UUID(self.problem)
         if not resume:
             self.store.clear_queue()
         elif self.store.db.execute('SELECT 1 FROM queue WHERE problem<>?', (self.problem,)).fetchone():

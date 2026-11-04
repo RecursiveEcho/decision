@@ -45,7 +45,15 @@ uv run python -m decision_observer status
 
 单次查看最近 400 个实体以等待延迟 OCR。已处理窗口可以继续推进；未处理数据超过窗口或待 OCR 实体跌出窗口时明确暂停，不悄悄漏数据。已接收 ID 是持久化去重游标；连续相同文字以问题+contentHash 抑制重复。先批量排空已授权队列再读新数据，每批最多 50 条，未处理数据下一轮继续。尚未实现超大积压的历史分页；恢复采用新授权时段，不补采暂停期间数据。
 
-通知独立运行，不需要开启屏幕同步：
+通知独立运行，不需要安装、启动或配置 Pensieve。先在网页注册一个保持 paused 的设备，使用其 scoped deviceToken；仅通知配置只询问 backendUrl/deviceId/deviceToken：
+
+```sh
+uv run python -m decision_observer configure --notifications-only
+```
+
+这会替换旧配置中的观察参数，不保留假 library/folder ID。`notifications` 不校验或构造 Pensieve；以后需要观察时，必须重新运行完整 `configure` 填写真实 library/folder/时区，并明确启动 `run`。通知专用配置直接执行 `run` 会在心跳、同意和清队列前被拒绝。
+
+由本人需要收提醒时再启动：
 
 ```sh
 uv run python -m decision_observer notifications
@@ -57,7 +65,7 @@ uv run python -m decision_observer notifications --once
 
 ## 当前验收边界
 
-已验证：34 项合成/本机 HTTP 测试、Python wheel/sdist 构建、默认暂停状态。未验证：真实中文 OCR、总控业务实例的 device 配对、Pensieve 底层启停、真实系统通知到达及用户看到、实际资源占用。没有读取个人历史，没有实际观察或通知验收结论。
+已验证：38 项合成/本机 HTTP 测试、Python wheel/sdist 构建、默认暂停状态。未验证：真实中文 OCR、总控业务实例的 device 配对、Pensieve 底层启停、真实系统通知到达及用户看到、实际资源占用。没有读取个人历史，没有实际观察或通知验收结论。
 
 ## 已准备的 Pensieve 独立环境
 

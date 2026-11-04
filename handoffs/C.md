@@ -1,7 +1,7 @@
 # C 观察回执
 
 交接编号：DECISION-MVP-20261104。角色由用户本轮明确为 C。
-状态：适配器已实现；隔离真实后端+合成数据联调通过，真实采集/系统通知仍未验证。开始：2026-11-04 17:28 +08:00。
+状态：适配器已集成；隔离真实后端+合成数据联调通过。E 已报告真实系统通知接口接受及后端回执成功，用户看到未确认；真实采集仍未启用。开始：2026-11-04 17:28 +08:00。
 工作区：decision-worktrees/observer；分支 feat/mvp-observer；只修改 observer/ 与本回执。
 
 | 功能 | 状态/实现 | 验证与遗留 |
@@ -59,3 +59,25 @@
 - 34 项单元/loopback HTTP/CLI 子进程测试通过；15 项真实 Java/PostgreSQL 合成联调通过，包括 emoji 长度及 snooze 到期重新通知、同轮不重复。测试 notifier 仍为替身。
 - 使用 A 最新 1a3d9ed 工作区已有 jar，SHA256 `c3a0777cb8acfd8cf587bc08b893b75a849080749a5b2dadfb9773248bb4edaf`；独立临时库/随机loopback端口、worker关闭、无外部key。测试后设备paused，临时Java/PG已清理。未改A/E文件，未启动Pensieve、录屏或真实系统通知。
 - 提交后通知 E 集成最新 C；真实采集和系统通知可见性仍未验收。
+
+
+## E 报告的真实通知验证 — 记录于 2026-11-04 18:56 +08:00
+
+证据来源为 E 总控消息（源聊天 01a1a5b5-b163-7803-9667-8e1d17bef002），以下不是 C 在本轮重新执行的测试：
+
+- E 使用已集成的 C `3c774b3`，在本机以独立合成测试设备验证；设备 desiredState/reportedState 均为 paused。
+- 据 E 报告，真实模型分析产生 1 条合成 discussion/delivery；`Runner.deliver()` 使用默认真实 `osascript`，系统接口接受，本地 notifications 记为 sent，后端待投递数量从 1 变为 0。
+- 可据此记录为“E 报告：真实系统通知接口接受 + ack 链路成功”；**不能记录为用户已看到、用户验收通过或真实屏幕观察通过**。
+- E 明确未调用 Pensieve.read/run 或任何录屏。本轮 C 仅维护回执，没有重复发送通知、读取屏幕历史或启用采集。
+
+此前各阶段“真实通知未验证”保留为当时状态；此报告更新通知接口/回执证据，用户可见性仍未确认，录屏继续关闭。
+
+
+## 仅通知配置入口修复 — 2026-11-04
+
+E 在交付检查中发现仅通知模式仍要求 Pensieve 配置。此前 E 真实测试曾在忽略配置中用 library/folder 占位 ID 1；这不算用户仅通知配置已完成。
+
+- 新增 `configure --notifications-only`：仅填写 backendUrl/deviceId/deviceToken，隐藏 token，0600 保存；不保留旧观察参数，不改设备状态。
+- `notifications` 只校验设备连接配置；Runner 延迟构造 Pensieve，通知路径完全不构造/访问它。
+- `run` 先完整校验观察配置与 problemId，缺少字段时在清队列、心跳或取得本地同意前失败，提示先完整 configure。
+- 独立只读审查通过。38 项测试通过（新增仅通知交互、最小配置模拟投递、不构造Pensieve、缺配置run保留队列且无HTTP）；构建通过。没有启动持续通知、真实系统通知或录屏。
