@@ -1,6 +1,6 @@
 # C：本地观察与桌面通知适配器
 
-Python 3.11+，运行时仅标准库。当前实现对接 Pensieve 0.37.0 的已核实 HTTP 格式；**尚未实测真实 Pensieve、业务后端或系统通知送达**。适配器不会自动安装/启动 Pensieve 或设置开机自启。开发阶段已在本模块忽略的独立环境安装 Pensieve，未启动服务或录屏。采集和同步是两个独立状态。
+Python 3.11+，运行时仅标准库。当前实现对接 Pensieve 0.37.0 的已核实 HTTP 格式；**已用合成文字验证隔离的真实 Java/PostgreSQL 后端；尚未实测真实 Pensieve 或系统通知送达**。适配器不会自动安装/启动 Pensieve 或设置开机自启。开发阶段已在本模块忽略的独立环境安装 Pensieve，未启动服务或录屏。采集和同步是两个独立状态。
 
 ## 安装与自检
 
@@ -53,11 +53,11 @@ uv run python -m decision_observer notifications
 uv run python -m decision_observer notifications --once
 ```
 
-每 5 秒取一条待发通知，macOS `osascript display notification` 接受后回执 sent，失败回执 failed。断线退出，明确重启；已有 sent 本地回执可重试而不重复弹出（操作系统调用成功但本地落盘前崩溃仍可能重复，非 exactly-once）。sent 不代表用户看到；需手动核验通知权限/专注模式。首版不支持点击通知跳转，回网页按同标题查议题。Ctrl-C 退出通知轮询；观察 pause 不关闭独立通知轮询。
+每 5 秒取一页待发通知（最多 20 条），按后端游标继续分页；失败项持久化指数退避（30 秒起、最多 1 小时），不阻塞同页及后续页，macOS `osascript display notification` 接受后回执 sent，失败回执 failed。断线退出，明确重启；已有 sent 本地回执可重试而不重复弹出（操作系统调用成功但本地落盘前崩溃仍可能重复，非 exactly-once）。sent 不代表用户看到；需手动核验通知权限/专注模式。首版不支持点击通知跳转，回网页按同标题查议题。Ctrl-C 退出通知轮询；观察 pause 不关闭独立通知轮询。
 
 ## 当前验收边界
 
-已验证：26 项合成/本机 HTTP 测试、Python wheel/sdist 构建、默认暂停状态。未验证：真实中文 OCR、真实后端 device/token/幂等拒绝、Pensieve 底层启停、真实系统通知到达及用户看到、实际资源占用。没有读取个人历史，没有实际观察或通知验收结论。
+已验证：30 项合成/本机 HTTP 测试、Python wheel/sdist 构建、默认暂停状态。未验证：真实中文 OCR、总控业务实例的 device 配对、Pensieve 底层启停、真实系统通知到达及用户看到、实际资源占用。没有读取个人历史，没有实际观察或通知验收结论。
 
 ## 已准备的 Pensieve 独立环境
 
@@ -73,3 +73,15 @@ uv pip install --python .local/pensieve-venv/bin/python -r pensieve-requirements
 **下面是本人明确启用后的前台运行步骤，本次未执行。** 三个独立终端使用同一环境：先 `.local/pensieve-venv/bin/memos serve`，确认服务与专用 library/folder 后 `.local/pensieve-venv/bin/memos watch`，最后本人选择无敏感页面、明确授权录屏后 `.local/pensieve-venv/bin/memos record`。record 会请求 macOS 屏幕录制权限并立即录屏；不要在未准备好时执行。首次 OCR/embedding 可能下载模型，尚未验证。首次普通 CLI 导入也可能创建 `~/.memos/config.yaml`，应先核对已有配置，别覆盖旧实例。前台进程用各终端 Ctrl-C 停止并检查实际状态；不要用 `enable`/整组 `start` 作为安装步骤。
 
 适配器的 `run` 和网页设备 running 仍须另行明确操作；停止适配器不能代替停止上述 record。前台启停步骤依据官方源码，真实启停效果仍待用户授权后的短时试验。
+
+## 隔离后端联调（无录屏）
+
+```sh
+uv run python scripts/backend_smoke.py --jar /path/to/decision-backend-0.1.0.jar
+```
+
+需要 Docker、JDK 17 和 A 已构建的 jar。脚本创建独立一次性 PostgreSQL、随机 loopback Java 端口、随机测试凭据；worker 关闭、mock 关闭、不注入模型/Wiki key。不使用总控业务库或 8080。结束恢复测试设备 paused 并删除自己创建的临时服务。
+
+已验证暂停拒绝、设备越权拒绝、心跳上传、去重、hash 校验、locator 回查、暂停竞争后恢复、20 条长中文分成 3 批、21 条合成 Delivery 分页/失败退避/跨设备 ack 拒绝。Delivery 由临时数据库直接注入测试夹具，系统通知函数用替身；不证明真实模型生成议题或通知到达。日期/结果见 `handoffs/C.md`。
+
+定位编码经 E 确认：`resourceId=pensieve:library:<数字ID>`，`frameId=pensieve:entity:<数字ID>`，不含文件路径。HTTP 批次同时受 50 条和实际 JSON 编码 900000 字节限制，兼容后端 1 MiB 上限。明确返回 rejected 的条目会更换请求幂等键后等待本人显式重启；网络结果未知保留原 key，避免重复写入。

@@ -129,6 +129,41 @@ class Tests(unittest.TestCase):
         self.source.read=read
         with self.assertRaises(ObserverError): self.runner.run()
         self.assertFalse(self.runner.consent); self.assertIsNotNone(self.store.pending(PROBLEM))
+    def test_long_chinese_batch_split_by_encoded_bytes(self):
+        self.active(); now=datetime.now(timezone.utc)
+        for i in range(20):
+            e=entity(now,i); e['metadata_entries'][0]['value']=json.dumps([{'rec_txt':('长'*19990)+str(i)}])
+            self.store.enqueue(observation(e,CONFIG,PROBLEM,now,now))
+        while self.store.pending(PROBLEM): self.runner.flush()
+        self.assertGreater(len(self.uploads()),1)
+        self.assertEqual(sum(len(c[2]['items']) for c in self.uploads()),20)
+        self.assertTrue(all(len(json.dumps(c[2]).encode())<=900000 for c in self.uploads()))
+    def test_known_rejection_changes_key(self):
+        self.active(); now=datetime.now(timezone.utc)
+        self.store.enqueue(observation(entity(now),CONFIG,PROBLEM,now,now)); old=self.store.pending(PROBLEM)[2]
+        real=self.api.request
+        def reject(method,path,body=None,key=None):
+            if path=='/observations/batch': return {'accepted':[], 'rejected':[{'externalId':body['items'][0]['externalId'],'code':'DEVICE_PAUSED'}]}
+            return real(method,path,body,key)
+        self.api.request=reject
+        with self.assertRaises(ObserverError): self.runner.flush()
+        self.assertNotEqual(self.store.pending(PROBLEM)[2],old)
+        self.api.request=real; self.runner.flush(); self.assertIsNone(self.store.pending(PROBLEM))
+    def test_failed_notification_does_not_starve_next(self):
+        first,second=str(uuid.uuid4()),str(uuid.uuid4()); calls=[]
+        def notification(title,reason):
+            calls.append(title)
+            if title=='fail': raise ObserverError('failure')
+        self.runner.notifier=notification; real=self.api.request
+        def pages(method,path,body=None,key=None):
+            if '/deliveries?' in path:
+                return {'items':[{'delivery':{'id':first},'discussion':{'title':'fail','reason':'synthetic'}}, {'delivery':{'id':second},'discussion':{'title':'ok','reason':'synthetic'}}], 'nextCursor':'synthetic-page-2'}
+            return real(method,path,body,key)
+        self.api.request=pages; self.runner.deliver(); self.runner.deliver()
+        self.assertEqual(calls,['fail','ok']); self.assertEqual(self.runner.delivery_cursor,'synthetic-page-2')
+    def test_locator_uses_supported_opaque_ids(self):
+        now=datetime.now(timezone.utc); item=observation(entity(now,42),CONFIG,PROBLEM,now,now)
+        self.assertEqual(item['sourceLocator'],{'resourceId':'pensieve:library:1','frameId':'pensieve:entity:42'})
     def test_applescript_strings_are_data(self):
         with patch('decision_observer.core.sys.platform','darwin'),patch('decision_observer.core.subprocess.run') as run:
             title='" & do shell script "bad'; notify(title,'合成通知'); args=run.call_args.args[0]
