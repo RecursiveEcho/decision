@@ -150,3 +150,13 @@ A 至少建立 problems、sources、messages、jobs、memories（含 revision hi
 - 模型内部可选 `decisionCandidate:{choice,quote,rationale?,expectedOutcome?,supersedesId?}`。quote 必须是当前用户原话连续片段，choice 是 quote 连续片段；只记录明确选择/承诺，不记录疑问、犹豫、假设、第三人或助手建议。未明确给出的理由和预期留空。
 - 自动 Decision 新增 `origin:"chat",userMessageId,quote,status:"active"|"superseded",supersedesId?`。唯一 userMessageId，并发/重试去重；仅可替代同问题旧自动决定，不改旧手填决定。旧 Job 不得覆盖更新的选择。
 - 助手 `Message.decisionRecord?` 返回实际持久化的 Decision。前端可简短显示“已记录”，不增加必须手填的决定表。自动保存只整理用户已表达的事实和选择，不代做选择。
+
+## 2026-11-05 记忆概览投影与资料入口
+
+- 原始记忆保留。默认页面展示最多5条模型提炼的短重点，每条最多80字符，合并近义内容并保留否定与适用条件；原话、来源与管理操作在详情。推断、观察、已忘记内容仅在全部记录中查看，不冒充本人事实。
+- `GET /memories/overview?problemId=` 只读返回 `{status:"empty"|"missing"|"pending"|"ready"|"failed",fingerprint,items,jobId:null|uuid,error:null|{code,message,retryable},coverage:{eligibleCount,consideredCount,truncated}}`。无problemId取全部active user_reported，global优先；有problemId只取全局和本问题。没有eligible直接empty，不调用模型。
+- `items`为`{summary,scope:"global"|"problem",problemId:null|uuid,memoryRefs:[{id,revision}]}`。每组只能同scope，局部必须同problem；引用必须在实际输入中、版本正确，不能重复引用到另一组。最多100条/32000字符完整原记录输入，不截半句，不承诺5条覆盖全部。
+- `POST /memories/overview`请求`{fingerprint,problemId?,retry?:true}`，owner+幂等key，统一202返回`{jobId:null|uuid,fingerprint,status}`。指纹过期返回409 OVERVIEW_CHANGED。missing首次进入自动请求一次；已在途/ready/failed复用，同指纹并发去重。只有显式retry:true且最新失败可重试才新建任务，不自动循环重试。POST不含摘要，避免旧幂等响应泄出已撤销摘要。
+- 指纹涵盖范围内全部eligible的内容、id/revision/scope/problem/status及模型、模式、摘要提示/结构版本。独立memory_overview Job使用现有存储作为派生缓存，调用模型在锁外（30s、有限输出、off），提交前重算指纹；旧结果不返回。`GET /jobs/{id}`不返回overview items，仅状态/指纹等元信息。摘要不写回原记忆、不改变聊天记忆事实。
+- 前端生成/轮询不阻挡导航，离页/退出/新请求防迟到覆盖。纠正、忘记后立即隐藏旧概览并重新获取；失败仍可查看全部记录及显式重试。摘要结果复用，不每次开页重复收费。
+- 资料图标在新对话状态也可打开：无上下文时用现有全局sources/topics列表，不偷用旧selected问题；添加、重分析、同步写入必须有明确原对话上下文。资料按自己的problemId可打开原对话，来回浏览保留新对话草稿/附件/档位。Wiki写作与知识库维护流程留待与用户后续讨论。
