@@ -343,6 +343,149 @@ class BackendTest {
   }
 
   @Test
+  void upstreamDeadlineCoversStalledBodyAndResponseSize() throws Exception {
+    var server =
+        com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext(
+        "/slow",
+        exchange -> {
+          exchange.sendResponseHeaders(200, 0);
+          exchange.getResponseBody().write('{');
+          exchange.getResponseBody().flush();
+          try {
+            Thread.sleep(400);
+          } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+          }
+          exchange.close();
+        });
+    server.createContext(
+        "/large",
+        exchange -> {
+          byte[] bytes = new byte[1_048_577];
+          exchange.sendResponseHeaders(200, bytes.length);
+          try {
+            exchange.getResponseBody().write(bytes);
+          } finally {
+            exchange.close();
+          }
+        });
+    server.start();
+    try {
+      String base = "http://127.0.0.1:" + server.getAddress().getPort();
+      ApiError timeout =
+          assertThrows(
+              ApiError.class,
+              () ->
+                  Upstream.post(
+                      base + "/slow", "fixture", Json.obj(), java.time.Duration.ofMillis(150)));
+      assertEquals("UPSTREAM_TIMEOUT", timeout.code);
+      ApiError large =
+          assertThrows(
+              ApiError.class,
+              () ->
+                  Upstream.post(
+                      base + "/large", "fixture", Json.obj(), java.time.Duration.ofSeconds(3)));
+      assertEquals("UPSTREAM_TOO_LARGE", large.code);
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void ownerCanCorrectRetractedMemoryAndExplicitlyReactivateIt() throws Exception {
+    String p = problem();
+    JsonNode m =
+        postJson(
+            "/memories",
+            owner,
+            Json.obj("problemId", p, "kind", "user_reported", "content", "撤销前的合成资料"),
+            201);
+    String id = m.path("id").asText();
+    req(
+        patch("/api/v1/memories/" + id),
+        owner,
+        Json.obj("status", "retracted", "expectedRevision", 1),
+        200);
+    req(
+        patch("/api/v1/memories/" + id),
+        owner,
+        Json.obj("content", "撤销后修正", "expectedRevision", 2),
+        200);
+    assertTrue(s.all("source", p).isEmpty());
+    JsonNode restored =
+        req(
+            patch("/api/v1/memories/" + id),
+            owner,
+            Json.obj("status", "active", "expectedRevision", 3),
+            200);
+    assertEquals(
+        "撤销后修正",
+        s.get("source", restored.path("evidence").get(0).path("sourceId").asText())
+            .path("text")
+            .asText());
+  }
+
+  @Test
+  void snoozeRearmsPreviouslySentNotification() throws Exception {
+    String p = problem();
+    JsonNode dev = device();
+    String id = dev.path("device").path("id").asText();
+    ObjectNode disc =
+        s.write(
+            () ->
+                s.create(
+                    "discussion",
+                    p,
+                    Json.obj(
+                        "problemId",
+                        p,
+                        "title",
+                        "虚构议题",
+                        "reason",
+                        "测试",
+                        "evidence",
+                        Json.arr(),
+                        "status",
+                        "unread",
+                        "snoozeUntil",
+                        null)));
+    ObjectNode delivery =
+        s.write(
+            () ->
+                s.create(
+                    "delivery",
+                    p,
+                    Json.obj(
+                        "discussionId",
+                        disc.path("id"),
+                        "deviceId",
+                        id,
+                        "channel",
+                        "desktop",
+                        "status",
+                        "sent",
+                        "error",
+                        null)));
+    req(
+        patch("/api/v1/discussions/" + disc.path("id").asText()),
+        owner,
+        Json.obj("status", "snoozed", "snoozeUntil", Instant.now().plusSeconds(120).toString()),
+        200);
+    assertEquals(
+        "pending", s.get("delivery", delivery.path("id").asText()).path("status").asText());
+    assertTrue(d.deliveries(id, "device:" + id).isEmpty());
+    s.write(
+        () -> {
+          ObjectNode delayed = s.get("discussion", disc.path("id").asText());
+          delayed.put("snoozeUntil", Instant.now().minusSeconds(1).toString());
+          s.save("discussion", delayed);
+          return null;
+        });
+    assertEquals(1, d.deliveries(id, "device:" + id).size());
+  }
+
+  @Test
   void wikiPublicUrlUsesBrowserAddress() {
     String old = c.wikiPublicUrl;
     try {

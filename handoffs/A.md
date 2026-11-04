@@ -37,3 +37,9 @@
 - 新增5项验证：多文章主题合并及修订历史、模型失败保留Source、伪造摘要引用拒绝、处理中记忆上下文变化拒绝旧回答、Wiki HTTP/1.1创建/更新及读回。隔离PostgreSQL共23项通过。外部HTTP夹具属于替身，未冒称真实模型/Wiki验收。
 - `backend/tools/live_smoke.py` 提供只用合成资料的真实闭环检查，读取指定忽略env，不打印key/token/模型正文。E服务ready后可运行，A不再启动共享库服务。
 - C已协调使用frameId/resourceId定位，不扩展共享字段。
+
+## G2 边界补强（2026-11-04 17:51 Asia/Shanghai）
+
+- `a0224be` 已推送：同问题主题摘要/证据合并、Wiki HTTP/1.1及真实链路脚本。
+- 继续修复发现的边界：外部响应整体60秒deadline覆盖body读取、1MiB硬上限；网页总读取时间上限；撤销的本人记忆可在明确激活时恢复新来源；已发送通知选择稍后会重新挂起，到期才能再次交付。
+- 隔离PostgreSQL共26项通过（0 failures/errors/skipped）；新增真实HTTP测试夹具模拟慢响应与超大响应，并未调用真实外部服务。

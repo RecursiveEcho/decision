@@ -194,22 +194,47 @@ class Domain {
     ObjectNode m = s.get("memory", id);
     revision(m, b);
     String p = m.path("problemId").asText();
-    if (b.has("content")) {
-      String text = Json.required(b, "content", 10000);
-      m.put("content", text);
-      if (m.path("kind").asText().equals("user_reported"))
-        for (JsonNode ev : m.path("evidence")) {
-          ObjectNode src = s.get("source", ev.path("sourceId").asText());
+    if (b.has("content")) m.put("content", Json.required(b, "content", 10000));
+    if (b.has("status")) m.put("status", Json.choice(b, "status", "active", "retracted"));
+    if (m.path("kind").asText().equals("user_reported")) {
+      String text = m.path("content").asText();
+      if (m.path("status").asText().equals("active")) {
+        ObjectNode src = null;
+        for (JsonNode ev : m.path("evidence"))
+          try {
+            src = s.get("source", ev.path("sourceId").asText());
+            break;
+          } catch (ApiError ex) {
+            if (ex.status != 404) throw ex;
+          }
+        if (src == null)
+          src =
+              source(
+                  p,
+                  "user_statement",
+                  "本人陈述",
+                  text,
+                  null,
+                  null,
+                  "user_input",
+                  Json.obj(),
+                  Json.now());
+        else if (!src.path("text").asText().equals(text)) {
           src.put("text", text);
           s.save("source", src);
-          ((ObjectNode) ev).put("quote", text);
         }
-    }
-    if (b.has("status")) m.put("status", Json.choice(b, "status", "active", "retracted"));
-    if (m.path("status").asText().equals("retracted")) {
-      for (JsonNode ev : m.path("evidence"))
-        if (m.path("kind").asText().equals("user_reported"))
-          s.delete("source", ev.path("sourceId").asText());
+        m.set(
+            "evidence",
+            Json.arr()
+                .add(Json.obj("sourceId", src.path("id"), "quote", text, "relation", "context")));
+      } else {
+        for (JsonNode ev : m.path("evidence"))
+          try {
+            s.delete("source", ev.path("sourceId").asText());
+          } catch (ApiError ex) {
+            if (ex.status != 404) throw ex;
+          }
+      }
     }
     m.put("revision", m.path("revision").asInt() + 1);
     invalidate(p, id);
@@ -335,6 +360,15 @@ class Domain {
       throw new ApiError(400, "INVALID_TIME", "稍后提醒需要将来时间");
     d.put("status", state);
     d.put("snoozeUntil", state.equals("snoozed") ? until : null);
+    if (state.equals("snoozed"))
+      for (ObjectNode delivery : s.all("delivery", d.path("problemId").asText()))
+        if (delivery.path("discussionId").asText().equals(id)
+            && !delivery.path("error").asText().equals("SOURCE_INVALIDATED")) {
+          delivery.put("status", "pending");
+          delivery.putNull("error");
+          s.save("delivery", delivery);
+        }
+
     return s.save("discussion", d);
   }
 
