@@ -95,3 +95,19 @@ E 指出 C 适配器仅接受已有设备凭据，旧空状态提示导致用户
 真实5173→8080提交仅一条合成问题：POST /problems返回201，ID `89c49d46-8420-4074-99a2-b3d3b5702a0d`，自动选中且表单关闭、无错误；整页刷新后仍恰好存在一条。真实窄屏标题聚焦与可见检查也通过。这是浏览器刷新回读，不冒充服务重启验证。
 
 修复后截图仅含合成页面，保存在本机忽略目录 `web/output/playwright/new-problem-mobile-synthetic.png`，不提交。最终8088部署交E负责，B未自行更改共享服务。
+
+### 8088生产部署复验（2026-11-04 19:10 +08:00）
+
+E部署90283a3后，B使用独立生产测试页验证1280px深滚动、390px窄屏，点击新建后标题focused=true/visible=true、表单数量1；取消正常。合成问题89c49d46-8420-4074-99a2-b3d3b5702a0d在真实列表中恰好1条，标题回读正确。网络记录仅登录POST，无新增问题或其他业务写入；未操作用户标签页，测试页已关闭。已通知E可交用户刷新试用，无新增代码变更。
+
+## 用户试用窗口恢复（2026-11-04）
+
+用户截图的左侧390px窄条来自B遗留的Playwright移动视口，不是网页CSS故障。独立只读审查确认：仅B所属decision-b-final单tab受影响，outerWidth1800而innerWidth390。普通新增CDP会话清除未生效；最终通过原主frame会话清除Emulation metrics，并移除该测试上下文的viewport/emulatedSize缓存，page.viewportSize()为null。没有固定为另一宽度、没有关闭页面或改动登录/业务数据。
+
+恢复后inner/client/visualViewport宽度均1200，main960，mobile媒体查询false；桌面导航和主区域截图目视正常。截图留在本机忽略目录web/output/playwright/restored-native-desktop-synthetic.png，不提交。page/context路由拦截均0；真实只读GET /api/v1/status返回200，model configured=true、lastCallStatus=succeeded、Wiki status=synced。未新增模型调用，不将状态读取充作新一轮模型/Wiki正文验收。已告知E可继续用户试用。
+
+## 新建草稿身份修复（2026-11-04 19:21开始，19:25自检完成）
+
+用户指出新建表单展开后，侧栏仍显示旧问题。独立只读审查确认：旧逻辑只展开表单，当前问题选择、主标题和旧业务区域未区分草稿。App.vue现保留内部原选择，以computed显示选择令新建时显示“新建问题（待创建）”；主标题同步中性显示，旧目标与业务区域隐藏。取消恢复原选择，选择已有问题/导航退出草稿；成功选新ID，失败保留草稿；退出登录清空新建字段。共享接口不变。
+
+构建和8项API测试通过。全新decision-b-draft独立窗口的明确契约替身验证：1280/390宽度的新建中性身份、隐藏旧内容、取消恢复、重复点击保留输入；500失败保留输入、201成功切换新ID、切回已有问题退出表单、退出登录清空草稿均通过。测试替身不计真实API/模型证据。待E部署8088后做本轮真实页面复验，未操作用户接管的decision-b-final窗口。
