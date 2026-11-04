@@ -254,3 +254,13 @@ E已审191ba07并合入，尚未更新8088，等待A后端统一部署。E目视
 ### 纠正记忆出处兼容（2026-11-04）
 
 按E/A定版，手动纠正自动记忆正文后origin=manual，清sourceMessageId/sourceQuote，保留scope，以新user_statement evidence承载编辑文本；仅忘记则保留出处。独立只读审查通过：Memory.origin补充manual枚举；记忆页与聊天记录均读取最新sourceQuote且仅存在时显示，不杜撰原话，Decision.origin不扩展。本次只有类型补丁，无新增行为；构建验证后推送。
+
+## 生产真实图文验收（2026-11-04 22:32开始）
+
+E统一部署A 0fb6964+8018650与B55688e2后通知ready；独立只读子Agent审查执行范围。实际8088加载index-DQNW5Sxv.js/index-Cw500KPQ.css。B新建独立decision-b-media-real浏览器，仅发送一次指定自制合成visual.png，选择深度/high、原定问法，不透露正确识别码、不使用用户内容。
+
+真实POST 202且payload thinking=high、image/png；Job real/succeeded，1user/1assistant，图片ready、1000x640、无截断。回答正确识别两个红圆/一个蓝正方形及图片识别码。刷新后从历史恢复2消息、附件与深度档；认证Blob预览实际加载1000x640，390无整页横向溢出。后续全为GET，未重发模型。
+
+E提供两组定点只读回看：off纯图=2消息1附件；low PDF/DOCX=2消息2附件，PDF两页已处理两页及DOCX未读取范围notice真实显示，Markdown表格可读。E已说明文档首次MODEL_EMPTY、明确retry成功，本轮回读未新增user/附件。B不将回读冒充自己执行文档真实调用；自动记忆/决定真实隔离测试由E负责，本人profile不写测试记忆。
+
+实际Job/消息ID、附件元数据、答复及读回结果保存在本机忽略文件web/output/playwright/media-real-evidence.json；真实截图media-real-answer-desktop/mobile.png、media-real-preview-desktop/mobile.png、media-e-0/1-desktop.png、media-e-documents-mobile.png，不提交公开库。脚本对未约定GET问题详情误请求得到500，已改为现有列表定位；历史“新对话”与新建按钮重名导致脚本选择器歧义，已限定历史区域后通过，均不是用户UI重发。当前无pending/running，等E最后重启ready后仅定点GET回读并清理自有会话，用户窗口未动。
