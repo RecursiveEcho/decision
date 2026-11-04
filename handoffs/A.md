@@ -1,6 +1,6 @@
 # A 后端回执
 
-状态：A 后端实现、自检与任务分支推送已完成；E 已集成代码并报告真实产品链路通过，正在完成整体验收。开始时间：2026-11-04 17:29:59 Asia/Shanghai；后端开发完成：2026-11-04 17:59 Asia/Shanghai。用户亲自验收尚未完成。
+状态：A 首版已交付；E在最终Docker复验发现第二篇analysis MODEL_FORMAT，追加修复已通过本地29项测试，等待E定点真实复验。开始时间：2026-11-04 17:29:59 Asia/Shanghai；后端开发完成：2026-11-04 17:59 Asia/Shanghai。用户亲自验收尚未完成。
 
 工作区 `decision-worktrees/backend`，分支 `feat/mvp-backend`，共同基线 `2fcea57`；独立只读审查已通过。本对话经用户明确分配为 A，仅修改 `backend/` 与 `handoffs/A.md`，不负责根目录或 E 集成。
 
@@ -78,3 +78,13 @@
 - A 对真实独立 Wiki 实例用合成工程页面完成创建、同页两次更新与全文回读比对，页面ID保持2；无个人信息。这是 adapter 实际证据，不等于整条来源→真实模型主题→Wiki闭环已通过，后者由E统一服务运行增强smoke。
 - `live_smoke.py` 已加强：验证真实模型摘要的观点/条件/未知/证据；再次投入相关文章，断言同Topic/同Wiki页面、revision增加、新来源引文有效，并独立调用实际Wiki API回读全文；最后明确确认决定并追加复盘。
 - E随后证实首次 go-offline 404秒后成功，构建并非卡死；最终保留已成功的 go-offline 层缓存路径，不用新cache mount遮蔽现有依赖，package保留可见日志。固定E已拉取核验的两份基础镜像digest。A不重复启动Docker构建，后续镜像由E验证。
+
+
+## Docker复验格式失败修复（2026-11-04 18:54 Asia/Shanghai）
+
+- E前次宿主smoke通过与本次Docker复验失败分开记录：合成problem `b2aba752-5c98-486f-9963-b4c81a8b0f05` 的第二次analysis job `644a8d97-f066-4d44-b211-bfb1ead904c5` 返回MODEL_FORMAT。精确error.message为“模型返回格式不符合约定”，对应可解析JSON的顶层非object；**不是已证实的截断**。旧响应未保留finish_reason/内容长度，不能恢复数组/标量具体值，不打印完整响应。
+- 独立只读审查再次通过。官方确认thinking默认enabled/high，JSON Output需要合法示例，也可能空白/截断。改为完整合法JSON对象示例+输出规模限制，显式关闭thinking控制4000token预算；严格保留对象/字段/引用校验，不拼补残缺JSON、不伪造空摘要。
+- Flyway V2追加安全诊断字段：problem、operation、finish_reason、content_length/type、reasoning_length；失败请求保留实际usage。细分MODEL_TRUNCATED/EMPTY/INVALID_JSON/SCHEMA/INCOMPLETE，可明确重试；不保存原始内容、prompt、reasoning或key。
+- E已统一授权并更新契约：owner `POST /problems/{id}/analyze`，{}+幂等键，202 Job；复用现有运行/排队分析，不重复来源/消息；失败Job保留。A同步OpenAPI，B由E协调添加按钮。不扩展通用job重试。
+- 隔离PG测试 **29项通过**。新增验证覆盖7种模型异常格式与失败usage保留、thinking显式关闭、重分析幂等/任务复用/权限/来源消息不重复；现有引用、Wiki、观察和决定测试均继续通过。
+- 增强smoke支持 `--reanalyze PROBLEM_UUID`，只针对现有失败合成问题做真实分析/Wiki回读及无重复数据检查；由E重建唯一后端后执行。A不启动第二worker、不再创造大批smoke数据。

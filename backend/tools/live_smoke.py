@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Explicit real-service smoke test; creates only synthetic problem/source/decision data.
 Usage: python3 tools/live_smoke.py /path/to/ignored/.env http://127.0.0.1:8080
+Add --reanalyze PROBLEM_UUID to retry one existing synthetic problem without recreating data.
 Never prints credentials, access tokens, model output, or source text.
 """
 import json,sys,time,uuid,urllib.request,urllib.error
@@ -33,18 +34,6 @@ def job(j):
         time.sleep(1)
     raise RuntimeError('Job timed out')
 
-token=call('POST','/auth/login',{'accessCode':config['APP_OWNER_ACCESS_CODE']})['accessToken']
-p=call('POST','/problems',{'title':'合成验收：虚构读书安排','goal':'每周用两小时读一本虚构书并保留讨论时间','constraints':['仅合成资料，无真实个人数据'],'unknowns':['虚构计划是否留有余量']})
-pid=p['id'];print(json.dumps({'event':'problem_created','problemId':pid}),flush=True)
-src=job(call('POST','/sources',{'problemId':pid,'kind':'article','title':'合成验收文章','text':'这是一份用于系统工程验收的虚构文章，不是真实建议。虚构方案甲需要每周六小时，而问题目标只允许每周两小时。方案乙把每次阅读分成二十分钟，并预留讨论时间。适用条件是读者能接受较慢的进度；不确定性是书籍难度。作者认为应优先核实时间预算。'}))
-print(json.dumps({'event':'source_ingested','topicCount':len(src['topicIds'])}),flush=True)
-result=job(call('POST','/problems/'+pid+'/messages',{'content':'仅根据这份虚构资料讨论时间预算，列出未知，不代替本人决定。请给出逐字原文引用。','sourceIds':[src['sourceId']]}))
-messages=call('GET','/problems/'+pid+'/messages')['items'];assistant=next(m for m in messages if m['id']==result['assistantMessageId'])
-assert assistant['mode']=='real';assert assistant['evidence'],'No verified evidence in real model response'
-source=call('GET','/sources/'+src['sourceId'])
-for e in assistant['evidence']:assert e['sourceId']==src['sourceId'] and e['quote'] in source['text']
-print(json.dumps({'event':'real_model_with_verified_evidence','evidenceCount':len(assistant['evidence'])}),flush=True)
-assert not call('GET','/decisions?problemId='+pid)['items'],'Model must not confirm decisions'
 def wait_summary():
     for _ in range(180):
         topics=call('GET','/topics?problemId='+pid)['items']
@@ -61,6 +50,38 @@ def wiki_readback(topic):
     assert not data.get('errors'),'Wiki independent readback rejected'
     assert data['data']['pages']['single']['content']==topic['markdown'],'Wiki content mismatch'
 
+token=call('POST','/auth/login',{'accessCode':config['APP_OWNER_ACCESS_CODE']})['accessToken']
+if len(sys.argv)>3:
+    if len(sys.argv)!=5 or sys.argv[3]!='--reanalyze':raise SystemExit('Optional arguments: --reanalyze PROBLEM_UUID')
+    pid=str(uuid.UUID(sys.argv[4]))
+    before_sources=call('GET','/sources?problemId='+pid)['items']
+    before_messages=call('GET','/problems/'+pid+'/messages')['items']
+    before_topics=call('GET','/topics?problemId='+pid)['items']
+    queued=call('POST','/problems/'+pid+'/analyze',{})
+    print(json.dumps({'event':'explicit_reanalysis_queued','problemId':pid,'jobId':queued['id']}),flush=True)
+    job(queued)
+    topics=wait_summary()
+    assert {t['id'] for t in topics}=={t['id'] for t in before_topics},'Reanalysis duplicated topics'
+    for topic in topics:
+        assert topic['evidence'],'Reanalysis has no verifiable source evidence'
+        for evidence in topic['evidence']:
+            source=call('GET','/sources/'+evidence['sourceId']);assert evidence['quote'] in source['text']
+        wiki_readback(topic)
+    assert {s['id'] for s in call('GET','/sources?problemId='+pid)['items']}=={s['id'] for s in before_sources},'Reanalysis duplicated sources'
+    assert {m['id'] for m in call('GET','/problems/'+pid+'/messages')['items']}=={m['id'] for m in before_messages},'Reanalysis duplicated messages'
+    print(json.dumps({'event':'real_reanalysis_and_wiki_readback_verified','problemId':pid,'sourceCount':len(before_sources),'topicCount':len(topics)}),flush=True)
+    raise SystemExit(0)
+p=call('POST','/problems',{'title':'合成验收：虚构读书安排','goal':'每周用两小时读一本虚构书并保留讨论时间','constraints':['仅合成资料，无真实个人数据'],'unknowns':['虚构计划是否留有余量']})
+pid=p['id'];print(json.dumps({'event':'problem_created','problemId':pid}),flush=True)
+src=job(call('POST','/sources',{'problemId':pid,'kind':'article','title':'合成验收文章','text':'这是一份用于系统工程验收的虚构文章，不是真实建议。虚构方案甲需要每周六小时，而问题目标只允许每周两小时。方案乙把每次阅读分成二十分钟，并预留讨论时间。适用条件是读者能接受较慢的进度；不确定性是书籍难度。作者认为应优先核实时间预算。'}))
+print(json.dumps({'event':'source_ingested','topicCount':len(src['topicIds'])}),flush=True)
+result=job(call('POST','/problems/'+pid+'/messages',{'content':'仅根据这份虚构资料讨论时间预算，列出未知，不代替本人决定。请给出逐字原文引用。','sourceIds':[src['sourceId']]}))
+messages=call('GET','/problems/'+pid+'/messages')['items'];assistant=next(m for m in messages if m['id']==result['assistantMessageId'])
+assert assistant['mode']=='real';assert assistant['evidence'],'No verified evidence in real model response'
+source=call('GET','/sources/'+src['sourceId'])
+for e in assistant['evidence']:assert e['sourceId']==src['sourceId'] and e['quote'] in source['text']
+print(json.dumps({'event':'real_model_with_verified_evidence','evidenceCount':len(assistant['evidence'])}),flush=True)
+assert not call('GET','/decisions?problemId='+pid)['items'],'Model must not confirm decisions'
 topics=wait_summary();assert len(topics)==1;before=topics[0];assert before['evidence'];wiki_readback(before)
 print(json.dumps({'event':'real_model_topic_and_independent_wiki_readback','revision':before['revision']}),flush=True)
 second=job(call('POST','/sources',{'problemId':pid,'kind':'article','title':'合成验收补充文章','text':'此为第二份相关的虚构工程验收资料。方案乙每周两小时可以拆为四次二十分钟阅读，再留四十分钟讨论；这份方案只适用于章节短且可分割的虚构书。与第一篇文章相比，新增限制是不得占用本已预留的休息时间。作者认为必须核实书籍章节是否能拆分。'}))

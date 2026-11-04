@@ -108,6 +108,20 @@ class Api {
     return post(r, b, 202, () -> d.chat(id, b));
   }
 
+  @PostMapping("/problems/{id}/analyze")
+  ResponseEntity<?> analyze(
+      @PathVariable String id, @RequestBody JsonNode b, HttpServletRequest r) {
+    return post(
+        r,
+        b,
+        202,
+        () -> {
+          if (!b.isObject() || !b.isEmpty())
+            throw new ApiError(400, "INVALID_REQUEST", "重新分析的请求体必须为{}对象");
+          return d.reanalyze(id);
+        });
+  }
+
   @GetMapping("/problems/{id}/messages")
   ObjectNode messages(
       @PathVariable String id,

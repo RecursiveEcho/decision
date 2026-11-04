@@ -122,7 +122,7 @@ class Store {
     return j;
   }
 
-  void analyze(String problemId, String mode) {
+  ObjectNode analyze(String problemId, String mode) {
     db.update(
         "INSERT INTO analysis_pending(problem_id,dirty) VALUES (?::uuid,true) ON"
             + " CONFLICT(problem_id) DO UPDATE SET dirty=true",
@@ -133,6 +133,13 @@ class Store {
                 + " AND input->>'operation'='analysis'",
             Integer.class,
             problemId);
-    if (count == 0) job("analysis", problemId, Json.obj(), mode);
+    if (count == 0) return job("analysis", problemId, Json.obj(), mode);
+    String id =
+        db.queryForObject(
+            "SELECT id::text FROM jobs WHERE problem_id=?::uuid AND state IN ('queued','running')"
+                + " AND input->>'operation'='analysis' LIMIT 1",
+            String.class,
+            problemId);
+    return get("job", id);
   }
 }

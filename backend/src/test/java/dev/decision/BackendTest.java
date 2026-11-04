@@ -122,7 +122,13 @@ class BackendTest {
                       "usage",
                       Json.obj("prompt_tokens", 10, "completion_tokens", 20),
                       "choices",
-                      Json.arr().add(Json.obj("message", Json.obj("content", response.toString()))))
+                      Json.arr()
+                          .add(
+                              Json.obj(
+                                  "finish_reason",
+                                  "stop",
+                                  "message",
+                                  Json.obj("content", response.toString()))))
                   .toString()
                   .getBytes(java.nio.charset.StandardCharsets.UTF_8);
           exchange.getResponseHeaders().set("Content-Type", "application/json");
@@ -499,6 +505,140 @@ class BackendTest {
           return null;
         });
     assertEquals(1, d.deliveries(id, "device:" + id).size());
+  }
+
+  @Test
+  void modelFormatsAreClassifiedAndFailedUsageIsPreserved() throws Exception {
+    var raw = new java.util.concurrent.atomic.AtomicReference<>("[]");
+    var finish = new java.util.concurrent.atomic.AtomicReference<>("stop");
+    var captured = new java.util.concurrent.atomic.AtomicReference<JsonNode>();
+    var server =
+        com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext(
+        "/chat/completions",
+        exchange -> {
+          captured.set(
+              Json.parse(
+                  new String(
+                      exchange.getRequestBody().readAllBytes(),
+                      java.nio.charset.StandardCharsets.UTF_8)));
+          byte[] output =
+              Json.obj(
+                      "model",
+                      "synthetic-format-fixture",
+                      "usage",
+                      Json.obj("prompt_tokens", 123, "completion_tokens", 4000),
+                      "choices",
+                      Json.arr()
+                          .add(
+                              Json.obj(
+                                  "finish_reason",
+                                  finish.get(),
+                                  "message",
+                                  Json.obj(
+                                      "content",
+                                      raw.get(),
+                                      "reasoning_content",
+                                      "synthetic private reasoning never persisted"))))
+                  .toString()
+                  .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+          exchange.sendResponseHeaders(200, output.length);
+          exchange.getResponseBody().write(output);
+          exchange.close();
+        });
+    server.start();
+    try {
+      c.modelBase = "http://127.0.0.1:" + server.getAddress().getPort();
+      c.modelKey = "synthetic-fixture-key";
+      String p = problem();
+      Model.Context ctx = model.context(p, Json.obj());
+      String[][] cases = {
+        {"[]", "stop", "MODEL_SCHEMA"},
+        {"null", "stop", "MODEL_SCHEMA"},
+        {"{}", "stop", "MODEL_SCHEMA"},
+        {"   ", "stop", "MODEL_EMPTY"},
+        {"{bad", "stop", "MODEL_INVALID_JSON"},
+        {"{partial", "length", "MODEL_TRUNCATED"},
+        {"{}", "aborted", "MODEL_INCOMPLETE"}
+      };
+      for (String[] sample : cases) {
+        raw.set(sample[0]);
+        finish.set(sample[1]);
+        ApiError error = assertThrows(ApiError.class, () -> model.call(ctx, true));
+        assertEquals(sample[2], error.code);
+        assertTrue(error.retryable);
+      }
+      assertEquals("disabled", captured.get().path("thinking").path("type").asText());
+      assertEquals(
+          7,
+          s.db.queryForObject(
+              "SELECT count(*) FROM model_calls WHERE problem_id=?::uuid AND input_tokens=123 AND"
+                  + " output_tokens=4000",
+              Integer.class,
+              p));
+      assertEquals(
+          "array",
+          s.db.queryForObject(
+              "SELECT content_type FROM model_calls WHERE problem_id=?::uuid ORDER BY created_at"
+                  + " LIMIT 1",
+              String.class,
+              p));
+      assertTrue(s.all("message", p).isEmpty());
+      assertTrue(s.all("discussion", p).isEmpty());
+      assertTrue(s.all("decision", p).isEmpty());
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void explicitReanalysisReusesActiveJobWithoutDuplicatingSourceOrMessage() throws Exception {
+    String p = problem();
+    source(p);
+    worker.runOne();
+    ObjectNode failed =
+        s.all("job", p).stream()
+            .filter(j -> j.path("kind").asText().equals("analysis"))
+            .findFirst()
+            .orElseThrow();
+    assertEquals("failed", failed.path("status").asText());
+    var server = modelServer(this::syntheticSummary);
+    try {
+      String key = Json.id();
+      JsonNode first =
+          req(
+              post("/api/v1/problems/" + p + "/analyze").header("Idempotency-Key", key),
+              owner,
+              Json.obj(),
+              202);
+      JsonNode replay =
+          req(
+              post("/api/v1/problems/" + p + "/analyze").header("Idempotency-Key", key),
+              owner,
+              Json.obj(),
+              202);
+      JsonNode active = postJson("/problems/" + p + "/analyze", owner, Json.obj(), 202);
+      assertEquals(first.path("id"), replay.path("id"));
+      assertEquals(first.path("id"), active.path("id"));
+      assertTrue(worker.runOne());
+      assertEquals("succeeded", job(first.path("id").asText()).path("status").asText());
+      assertEquals("failed", job(failed.path("id").asText()).path("status").asText());
+      assertEquals(1, s.all("source", p).size());
+      assertTrue(s.all("message", p).isEmpty());
+      assertFalse(s.all("topic", p).get(0).path("markdown").asText().contains("摘要生成未完成"));
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void reanalysisIsOwnerOnlyAndRequiresExistingSources() throws Exception {
+    String p = problem();
+    postJson("/problems/" + p + "/analyze", owner, Json.obj(), 400);
+    JsonNode dev = device();
+    postJson("/problems/" + p + "/analyze", dev.path("deviceToken").asText(), Json.obj(), 403);
+    req(post("/api/v1/problems/" + p + "/analyze"), owner, Json.obj(), 400);
+    postJson("/problems/" + Json.id() + "/analyze", owner, Json.obj(), 404);
   }
 
   @Test
