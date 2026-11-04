@@ -1,5 +1,9 @@
 # 开发交接状态
 
+## 2026-11-05 当前开发：讨论后确认知识与 Obsidian
+
+用户已确认并授权开工：先和AI聊清重要内容，再审阅新增/合并/修订裁剪/暂不保存建议，确认后入库；保留出处历史，自动多领域分类及关联，以本机Obsidian单向浏览。独立只读审查通过；E固定契约与同步helper，A/B在独立worktree实现。当前实施中，未交付，详见`docs/mvp/KNOWLEDGE.md`与`CONTRACT.md`新增节。旧Topic/Wiki和本轮正式知识分开，旧资料不自动升级。没有授权采集/通知、公网部署或修改TGA。
+
 <!-- DECISION-HANDOFF-BEGIN DECISION-MVP-20261104 -->
 交接编号：`DECISION-MVP-20261104`。更新时间：2026-11-04，Asia/Shanghai。
 

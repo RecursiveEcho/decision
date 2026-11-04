@@ -1,5 +1,21 @@
 # 共享接口约定 v1
 
+## 2026-11-05 讨论后确认知识（本轮固定契约）
+
+本节为已授权新增范围；独立于旧 Topic/Wiki，旧自动摘要不得修改正式知识。详细目标及验收见 KNOWLEDGE.md。
+
+- `KnowledgeRef={kind:"message"|"source",id,quote,role?:"user"|"assistant"}`。id须为本次真实提供的记录，quote为实际提供正文的连续片段（最多500字）；message保留角色。助手话语是讨论记录，不是外部事实证明。附件不冒充 source 引用；首版不直接导出/引用附件原件，coverage 明示此范围。
+- `KnowledgeEntry={id,problemId,title,markdown,domains:string[],relatedEntryIds:string[],refs:KnowledgeRef[],revision,proposalId,createdAt,updatedAt}`。正式知识仅本人确认提案可新建/更新；标题≤160字、正文≤16000字、领域最多4个（每个≤40字）、相关条目最多8个且必须存在；没有合理领域可用“待归类”。不把目录名交给模型。
+- `KnowledgeProposal={id,problemId,status:"pending"|"accepted"|"dismissed",action:"create"|"merge"|"revise"|"skip",title,markdown,domains,relatedEntryIds,refs,reason,targetEntryId:null|string,targetRevision:null|number,contextFingerprint,coverage,createdAt,updatedAt,entryId?:string}`。merge/revise 的正文是完整拟保存的新版本，UI可同时回看旧版；保留条件差异/未决争议。skip 不建立正式知识。提案持久化后不可由客户端传正文修改，继续讨论后重新生成。
+- `coverage={messagesTotal,messagesConsidered,sourcesTotal,sourcesConsidered,knowledgeTotal,knowledgeConsidered,truncated:boolean,attachmentsIncluded:false,notice:string}`。对照是有界检索，不宣称全量读完；正文裁剪和附件范围须可见。不静默使用已撤销来源/已更正旧消息。
+- `POST /problems/{id}/knowledge-proposals`，`{}`，owner+幂等键，202 `Job(kind="knowledge_proposal")`；任务成功`result={proposalId}`。同快照在途去重，失败后可以明确重新整理。模型调用锁外，写入前复核快照。提案与原始对话均不因失败而丢失。
+- `GET /knowledge-proposals?problemId=&cursor=&limit=` 分页列表，updatedAt降序；problemId可省略。`GET /knowledge-proposals/{id}` 返回提案。
+- `POST /knowledge-proposals/{id}/accept`，`{expectedTargetRevision:null|number}`，owner+幂等键，200 `{proposalId,entryId,status:"accepted",action}`。create必须null；merge/revise必须等于提案中的目标版本并复核当前目标。事务内检查上下文仍有效、引用仍存在/有效、目标未改，保存历史与知识、接受提案。重复确认即使不同幂等键也只写一次；accepted重复回同一元信息。skip不可接受。过期返回409 `KNOWLEDGE_CHANGED`，保留提案供查看，需重新整理。只返回接受元信息，不在旧幂等响应里重放正文。
+- `POST /knowledge-proposals/{id}/dismiss`，`{}`，owner+幂等键，200 `{proposalId,status:"dismissed"}`；重复略过幂等；accepted不可dismiss。
+- `GET /knowledge-entries?cursor=&limit=` 全局分页列表，updatedAt降序；`GET /knowledge-entries/{id}` 返回当前条目。`GET /knowledge-entries/{id}/history` 返回 `{items:KnowledgeEntry[],nextCursor:null}`（历史旧版，按revision降序）。
+- `GET /knowledge-export` owner专用，只读、no-store，在一致快照返回 `{version:1,generatedAt,entries:KnowledgeEntry[],histories:[{entryId,versions:KnowledgeEntry[]}],references:[{kind,id,title,role?,problemId,quote,text?,originUrl?}],domains:string[]}`。仅已确认知识及其实际引用，不包含全部聊天、记忆、原始附件或密钥；出处引用保留必要连续片段即可。全量快照供本机helper按hash增量更新。device不得读知识与导出。
+- 常规聊天有界检索跨对话已确认知识（ID/revision/标题/正文/领域）和本对话最近pending提案，作为不可信讨论资料；不把知识内容变成系统指令、外部事实或本人陈述。准备/接受/导出不触发旧来源入库与自动Topic覆盖，不自动记忆或替本人决定。
+
 所有路径以 `/api/v1` 开头。E 为唯一修改者；A 负责实现并补齐机器可读 OpenAPI，B/C/D 不自行改路由或字段。本文是待实现约定，不代表 API 已存在。
 
 ## 通用约定
