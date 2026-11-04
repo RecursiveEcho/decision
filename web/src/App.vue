@@ -1007,8 +1007,10 @@ onUnmounted(() => {
           </p>
           <article v-for="m in memories" :key="m.id" class="memory-row">
             <small
-              >{{ m.scope === "global" ? "用于其他对话" : "仅本次对话"
-              }}<span v-if="m.status !== 'active'"> · 已忘记</span></small
+              >{{ m.scope === "global" ? "用于其他对话" : "仅用于原对话"
+              }}<span v-if="m.kind === 'inferred'"> · 推断，未由你确认</span
+              ><span v-else-if="m.kind === 'observed'"> · 观察所得</span
+              ><span v-if="m.status !== 'active'"> · 已忘记</span></small
             >
             <p class="pre">{{ m.content }}</p>
             <details v-if="m.sourceQuote" class="record-origin">
