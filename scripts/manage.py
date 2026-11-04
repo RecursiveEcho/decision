@@ -134,6 +134,13 @@ def verify_backup(directory):
                 compose('exec', '-T', service, 'pg_restore', '-U', database, '-d', scratch, '--exit-on-error', stdin=source)
             compose('exec', '-T', service, 'psql', '-U', database, '-d', scratch, '-v', 'ON_ERROR_STOP=1', '-tAc',
                     "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")
+            if database == 'decision':
+                present = compose('exec', '-T', service, 'psql', '-U', database, '-d', scratch, '-tAc',
+                                  "SELECT to_regclass('public.records') IS NOT NULL", capture_output=True, text=True)
+                if present.stdout.strip() == 't':
+                    print('Restored business record counts (no personal content):', flush=True)
+                    compose('exec', '-T', service, 'psql', '-U', database, '-d', scratch, '-tAc',
+                            "SELECT kind,count(*) FROM records WHERE NOT deleted GROUP BY kind ORDER BY kind")
         finally:
             compose('exec', '-T', service, 'dropdb', '-U', database, scratch)
     import tarfile

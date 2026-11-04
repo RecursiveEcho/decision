@@ -71,7 +71,7 @@ services:
       WIKI_BASE_URL: http://wiki:3000
       WIKI_PUBLIC_URL: ${WIKI_PUBLIC_URL:-http://127.0.0.1:8090}
       WIKI_ACCESS_TOKEN: ${WIKI_ACCESS_TOKEN:-}
-      WIKI_LOCALE: ${WIKI_LOCALE:-zh}
+      WIKI_LOCALE: ${WIKI_LOCALE:-en}
     depends_on:
       database:
         condition: service_healthy

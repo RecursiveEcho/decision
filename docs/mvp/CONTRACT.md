@@ -42,6 +42,7 @@
 | POST `/problems` | `{title,goal,constraints?:[],unknowns?:[]}` | 201 Problem |
 | GET `/problems` | `cursor,limit` | Problem 列表，updatedAt 降序 |
 | PATCH `/problems/{id}` | `{title?,goal?,constraints?,unknowns?}` | Problem；旧目标保留内部历史 |
+| POST `/problems/{id}/analyze` | `{}`，owner token、Idempotency-Key | 202 analysis Job；本人显式重新分析当前资料与记忆，不重复建立 Source/Message；已有 queued/running analysis 时复用；成功 result 沿用 analysis；无来源时明确 400 |
 | POST `/problems/{id}/messages` | `{content,sourceIds?:[]}` | 202 Job；先保存用户消息；完成 result=`{userMessageId,assistantMessageId}` |
 | GET `/problems/{id}/messages` | `cursor,limit` | Message 列表，createdAt 升序；新消息 id 不重复 |
 | GET `/jobs/{id}` | 无 | Job；仅本人或所属 device 可见 |
