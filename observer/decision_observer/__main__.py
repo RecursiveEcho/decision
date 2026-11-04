@@ -7,28 +7,24 @@ import time
 import uuid
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from .core import ObserverError, Runner, Store, atomic_json, valid_url
+from .core import ObserverError, Runner, Store, atomic_json, validate_config
 
 
-def load_config(home):
+def load_config(home, observation_required=True):
     path = home / 'config.json'
     if not path.exists(): raise ObserverError('Run configure first; device pairing required')
     if path.stat().st_mode & 0o077: raise ObserverError('config.json must have permissions 0600')
     c = json.loads(path.read_text())
-    valid_url(c['backendUrl']); valid_url(c['pensieveUrl'], True)
-    uuid.UUID(c['deviceId']); ZoneInfo(c['pensieveTimezone'])
-    for key in ('libraryId', 'folderId'):
-        c[key] = int(c[key])
-        if c[key] < 1: raise ObserverError('Library/folder IDs must be positive')
-    if not c['deviceToken'] or '\n' in c['deviceToken']: raise ObserverError('Scoped device token required')
-    return c
+    return validate_config(c, observation_required)
 
 
 def main():
     p = argparse.ArgumentParser(description='Default-paused text sync; never starts/stops Pensieve recording')
     p.add_argument('--home', type=Path, default=Path.home()/'.decision-observer')
     sub = p.add_subparsers(dest='command', required=True)
-    for cmd in ('configure', 'status', 'pause', 'stop'): sub.add_parser(cmd)
+    for cmd in ('status', 'pause', 'stop'): sub.add_parser(cmd)
+    configure = sub.add_parser('configure')
+    configure.add_argument('--notifications-only', action='store_true', help='Only backend and scoped device credentials; no Pensieve setup')
     notifications = sub.add_parser('notifications', help='Poll desktop deliveries; no screen-history access')
     notifications.add_argument('--once', action='store_true')
     run = sub.add_parser('run')
@@ -60,17 +56,17 @@ def main():
         if a.command == 'configure':
             c = {'backendUrl': input('Backend URL including /api/v1: ').strip(),
                  'deviceId': input('Already-paired device UUID: ').strip(),
-                 'deviceToken': getpass.getpass('Scoped device token (hidden): ').strip(),
-                 'pensieveUrl': input('Pensieve URL [http://127.0.0.1:8839]: ').strip() or 'http://127.0.0.1:8839',
-                 'libraryId': int(input('Selected library ID: ')),
-                 'folderId': int(input('Selected folder ID: ')),
-                 'pensieveTimezone': input('IANA timezone [Asia/Shanghai]: ').strip() or 'Asia/Shanghai'}
-            valid_url(c['backendUrl']); valid_url(c['pensieveUrl'],True)
-            uuid.UUID(c['deviceId']); ZoneInfo(c['pensieveTimezone'])
-            if c['libraryId']<1 or c['folderId']<1 or not c['deviceToken']: raise ObserverError('Invalid pairing fields')
+                 'deviceToken': getpass.getpass('Scoped device token (hidden): ').strip()}
+            if not a.notifications_only:
+                c.update({
+                    'pensieveUrl': input('Pensieve URL [http://127.0.0.1:8839]: ').strip() or 'http://127.0.0.1:8839',
+                    'libraryId': int(input('Selected library ID: ')),
+                    'folderId': int(input('Selected folder ID: ')),
+                    'pensieveTimezone': input('IANA timezone [Asia/Shanghai]: ').strip() or 'Asia/Shanghai'})
+            validate_config(c, observation_required=not a.notifications_only)
             atomic_json(home/'config.json',c)
             print('配置已保存；观察与同步仍关闭。'); return
-        c=load_config(home); store=Store(home)
+        c=load_config(home, observation_required=a.command != 'notifications'); store=Store(home)
         if a.command == 'notifications':
             runner = Runner(c,store,None)
             print('轮询桌面通知；sent 仅表示系统接口接受，Ctrl-C 退出。', flush=True)
