@@ -659,6 +659,13 @@ class Domain {
       if (ids.isEmpty() || !subject.equals("device:" + ids.get(0)))
         throw new ApiError(403, "FORBIDDEN", "此任务不属于该设备");
     }
+    if (j.path("kind").asText().equals("memory_overview")) {
+      // Derived content is served only by the fingerprint-checked overview endpoint.
+      String fingerprint =
+          s.db.queryForObject(
+              "SELECT input->>'fingerprint' FROM jobs WHERE id=?::uuid", String.class, id);
+      if (j.hasNonNull("result")) j.set("result", Json.obj("fingerprint", fingerprint));
+    }
     return j;
   }
 

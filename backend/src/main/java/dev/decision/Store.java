@@ -127,6 +127,7 @@ class Store {
           case "chat" -> "chat";
           case "ingest" -> "source_ingest";
           case "wiki" -> "topic_sync";
+          case "memory_overview" -> "memory_overview";
           default -> "analysis";
         };
     ObjectNode j =
