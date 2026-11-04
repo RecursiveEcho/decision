@@ -178,3 +178,19 @@ E停止再启动五服务并通知恢复后，B仅在独立decision-b-round2刷�
 截图仅本机忽略目录：`web/output/playwright/chat-first-empty-1280.png`、`chat-first-empty-390.png`、`chat-first-answer-fixture-1280.png`、`chat-first-answer-fixture-390.png`。E已目视初始截图确认方向。该独立测试窗口结束时会话/pending均清、routes0、viewportSize=null并关闭；用户旧窗口未动。
 
 待E部署后：按正式任务仅两组无资料合成困扰（明确/含糊疲惫）各两轮，记录真实首答是否有帮助、至多一关键问题、自动标题及承接，截图和具体ID只留本机。A另做只读核验，不替代B实际UI。
+
+### 一句话开聊真实检查（2026-11-04 20:32—20:39）
+
+E部署B 09aa2e1与A 9206ab3/V4后，独立真实窗口完成两组无资料合成对话，各两轮，均real/succeeded。登录初始与新对话均单输入框、无四字段建档，历史默认折叠；新对话输入为空，没有沿用旧问题。标题分别自动变为报告困扰和疲惫困扰摘要，每组恰好2条user/2条assistant；goal为空，sources/memories/decisions均0，没有将模型推断自动保存为本人事实。1280/390截图仅本机保存，窄屏目视无横向溢出。
+
+语义结果分开记录：疲惫场景先给缓解动作、最多一个选择式问题，第二轮承接用户想先缓一缓。报告场景虽给了短行动并连续承接，但仍要求用户自己列报告标题/小标题，未达到用户“AI替我整理”的完整目标，E判为需改进，不能记作语义完全验收。B已停止新增旧版模型调用，等待A最小提示修正、E部署后仅用新报告场景两轮复验；UI无需改动。
+
+具体ID、两组首答及两轮全文在本机忽略文件 `web/output/playwright/chat-first-real-evidence.json`，真实首答截图为 `chat-first-real-clear-answer-1280.png/390.png` 与 `chat-first-real-ambiguous-answer-1280.png/390.png`；均未提交公开仓库。当前无在途Job/pending，独立窗口暂留给补丁复验和最终重启只读回读；用户旧窗口未动。
+
+### 5020802提示复验与历史入口修复（2026-11-04 20:41—20:44）
+
+按E最终收窄范围，仅新增3次真实调用：新报告场景两轮、新普通疲惫含糊场景首轮，均real/succeeded；分别2user/2assistant和1user/1assistant，goal空、source/memory/decision均0。全文/Job在同一本机JSON的revised5020802段；首答截图为chat-first-revised-report-first-1280.png/390.png和chat-first-revised-tired-1280.png/390.png。现已停写、无pending。
+
+语义不能判全通过：报告首答提供骨架并问主题，第二轮能直接代拟，但正文擅补“现场观察和口头反馈”“符合预期”等未给事实；折叠不确定性承认部分推断不足以修正正文。含糊首答先要求写三行，虽有只答一句兜底，仍有填表感。已向E/A明确报告，后续提示/语义验收由E协调，不以接口成功替代。
+
+E代码复核发现首次选择第一条历史可能不加载：初始化已selected首ID但newProblem=true，选同ID仅改变newProblem，原watch监听selected/tab不触发。独立只读子Agent确认后，App.vue仅将newProblem加入watch源，保留原ID变化清理与busy逻辑。构建和18项测试通过；独立临时标签使用新本地生产bundle、真实只读API验证首次选第一条及新对话后再选同条均显示已有消息，各有messages GET、写请求0。静态文件在该临时标签路由到本地预览，不宣称已部署；标签已清路由/会话并关闭。待E更新静态资源后在8088补只读检查。

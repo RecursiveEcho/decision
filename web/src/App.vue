@@ -460,7 +460,7 @@ async function setDevice(d: Device, state: string) {
 function evidenceText(e: Evidence) {
   return `${e.relation === "supports" ? "支持" : e.relation === "contradicts" ? "相反依据" : "背景"}：${e.quote}`;
 }
-watch([selected, tab], ([id], [old]) => {
+watch([selected, tab, newProblem], ([id], [old]) => {
   if (id !== old) {
     editingGoal.value = false;
     goalDraft.value = "";
