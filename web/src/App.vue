@@ -66,6 +66,25 @@ const reviewDraft = ref<
 const newProblemForm = ref<HTMLFormElement | null>(null);
 const newProblemTitle = ref<HTMLInputElement | null>(null);
 const errorBanner = ref<HTMLDivElement | null>(null);
+const editingGoal = ref(false);
+const goalDraft = ref("");
+function openGoalEditor() {
+  if (busy.value || !problem.value) return;
+  goalDraft.value = problem.value.goal;
+  editingGoal.value = true;
+}
+async function saveGoal() {
+  if (!problem.value || !goalDraft.value.trim()) return;
+  const id = problem.value.id;
+  await act(async () => {
+    const updated = await request<Problem>(`/problems/${id}`, "PATCH", {
+      goal: goalDraft.value.trim(),
+    });
+    problems.value = problems.value.map((p) => (p.id === id ? updated : p));
+    editingGoal.value = false;
+    note.value = "问题目标已更新。";
+  });
+}
 const displayedProblem = computed({
   get: () => (newProblem.value ? "" : selected.value),
   set: (id: string) => {
@@ -76,6 +95,7 @@ const displayedProblem = computed({
 async function openNewProblem() {
   if (busy.value) return;
   newProblem.value = true;
+  editingGoal.value = false;
   sourceDetail.value = null;
   error.value = "";
   note.value = "";
@@ -141,6 +161,8 @@ function ended() {
   problems.value = [];
   selected.value = "";
   newProblem.value = false;
+  editingGoal.value = false;
+  goalDraft.value = "";
   title.value = "";
   goal.value = "";
   constraints.value = "";
@@ -390,6 +412,8 @@ function evidenceText(e: Evidence) {
 }
 watch([selected, tab], ([id], [old]) => {
   if (id !== old) {
+    editingGoal.value = false;
+    goalDraft.value = "";
     clearData();
     chosenSources.value = [];
     content.value = "";
@@ -539,6 +563,32 @@ onUnmounted(() => {
           <p>目标：{{ problem.goal }}</p>
           <p>限制：{{ problem.constraints.join("；") || "尚未填写" }}</p>
           <p>未知：{{ problem.unknowns.join("；") || "尚未填写" }}</p>
+          <button
+            v-if="!editingGoal"
+            class="secondary"
+            :disabled="busy"
+            @click="openGoalEditor"
+          >
+            修改目标
+          </button>
+          <form v-else @submit.prevent="saveGoal">
+            <label
+              >更新问题目标<textarea
+                v-model="goalDraft"
+                required
+                :disabled="busy"
+              />
+            </label>
+            <button :disabled="busy || !goalDraft.trim()">保存目标</button>
+            <button
+              type="button"
+              class="secondary"
+              :disabled="busy"
+              @click="editingGoal = false"
+            >
+              取消修改
+            </button>
+          </form>
         </details>
         <div v-if="!messages.length" class="empty">
           <h2>先说说你的处境</h2>
