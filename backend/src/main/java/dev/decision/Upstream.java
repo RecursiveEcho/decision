@@ -11,6 +11,7 @@ import java.time.Duration;
 final class Upstream {
   static final HttpClient CLIENT =
       HttpClient.newBuilder()
+          .version(HttpClient.Version.HTTP_1_1)
           .connectTimeout(Duration.ofSeconds(10))
           .followRedirects(HttpClient.Redirect.NEVER)
           .build();

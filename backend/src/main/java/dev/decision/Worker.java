@@ -89,6 +89,8 @@ class Worker {
       s.write(
           () -> {
             fail(work.path("jobId").asText(), e);
+            if (work.path("operation").asText().equals("analysis"))
+              summaryFailed(work.path("problemId").asText(), e);
             if (work.path("operation").asText().equals("wiki")) {
               ObjectNode topic = s.get("topic", work.path("topicId").asText());
               topic.put(
@@ -171,40 +173,40 @@ class Worker {
                   extraction,
                   Json.obj(),
                   Json.now());
-          String excerpt = content.substring(0, Math.min(content.length(), 2000));
-          ObjectNode topic =
-              s.create(
-                  "topic",
-                  p,
-                  Json.obj(
-                      "problemId",
-                      p,
-                      "title",
-                      src.path("title"),
-                      "markdown",
-                      "# 资料摘录（非模型总结）\n\n"
-                          + escape(excerpt)
-                          + "\n\n来源 ID："
-                          + src.path("id").asText(),
-                      "evidence",
-                      Json.arr()
-                          .add(
-                              Json.obj(
-                                  "sourceId",
-                                  src.path("id"),
-                                  "quote",
-                                  excerpt,
-                                  "relation",
-                                  "context")),
-                      "revision",
-                      1,
-                      "wikiPageId",
-                      null,
-                      "wikiUrl",
-                      null,
-                      "syncStatus",
-                      c.wikiConfigured() ? "pending" : "pending_configuration"));
-          if (c.wikiConfigured()) s.job("wiki", p, Json.obj("topicId", topic.path("id")), c.mode());
+          List<ObjectNode> existing = s.all("topic", p);
+          ObjectNode topic;
+          if (existing.isEmpty()) {
+            topic =
+                s.create(
+                    "topic",
+                    p,
+                    Json.obj(
+                        "problemId",
+                        p,
+                        "title",
+                        s.get("problem", p).path("title"),
+                        "markdown",
+                        "资料已保存，模型主题摘要待生成。",
+                        "evidence",
+                        Json.arr(),
+                        "revision",
+                        1,
+                        "wikiPageId",
+                        null,
+                        "wikiUrl",
+                        null,
+                        "syncStatus",
+                        c.wikiConfigured() ? "pending" : "pending_configuration"));
+          } else {
+            topic = existing.get(0);
+            topic.put(
+                "markdown",
+                "新资料已保存，主题摘要待更新。\n\n"
+                    + topic.path("markdown").asText().replace("新资料已保存，主题摘要待更新。\n\n", ""));
+            topic.put("revision", topic.path("revision").asInt() + 1);
+            topic.put("syncStatus", c.wikiConfigured() ? "pending" : "pending_configuration");
+            s.save("topic", topic);
+          }
           s.analyze(p, c.mode());
           success(
               work.path("jobId").asText(),
@@ -361,9 +363,68 @@ class Worker {
                       "revision",
                       1));
           }
+          updateTopic(p, response.path("topic"), ctx);
           success(work.path("jobId").asText(), Json.obj("discussionIds", ids));
           return null;
         });
+  }
+
+  void updateTopic(String p, JsonNode summary, Model.Context ctx) {
+    if (c.mock) return;
+    List<ObjectNode> topics = s.all("topic", p);
+    if (topics.isEmpty()) return;
+    if (!summary.isObject()) throw new ApiError(502, "SUMMARY_MISSING", "模型未返回主题摘要；来源仍已保存");
+    String title = Json.required(summary, "title", 300);
+    ArrayNode claims = Json.strings(summary, "viewpoints"),
+        conditions = Json.strings(summary, "conditions"),
+        unknowns = Json.strings(summary, "uncertainties");
+    ArrayNode citations = model.citations(summary.get("evidence"), ctx, evidence);
+    if (claims.isEmpty() || citations.isEmpty())
+      throw new ApiError(502, "SUMMARY_UNGROUNDED", "模型摘要缺少可核验观点或引用；来源仍已保存");
+    StringBuilder markdown =
+        new StringBuilder("# ")
+            .append(escape(title))
+            .append("\n\n模型整理，仅覆盖本次提供的有限来源；作者观点、条件与未知不代表已证实事实。\n");
+    appendSection(markdown, "观点", claims);
+    appendSection(markdown, "适用条件", conditions);
+    appendSection(markdown, "不确定性", unknowns);
+    markdown.append("\n## 原文依据\n");
+    for (JsonNode ev : citations)
+      markdown
+          .append("\n- 来源 `")
+          .append(ev.path("sourceId").asText())
+          .append("`：")
+          .append(escape(ev.path("quote").asText()))
+          .append("\n");
+    ObjectNode topic = topics.get(0);
+    topic.put("title", title);
+    topic.put("markdown", markdown.toString());
+    topic.set("evidence", citations);
+    topic.put("revision", topic.path("revision").asInt() + 1);
+    topic.put("syncStatus", c.wikiConfigured() ? "pending" : "pending_configuration");
+    s.save("topic", topic);
+    if (c.wikiConfigured()) s.job("wiki", p, Json.obj("topicId", topic.path("id")), c.mode());
+  }
+
+  static void appendSection(StringBuilder b, String heading, ArrayNode lines) {
+    b.append("\n## ").append(heading).append("\n");
+    if (lines.isEmpty()) b.append("\n资料不足，尚待补充。\n");
+    for (JsonNode line : lines) b.append("\n- ").append(escape(line.asText())).append("\n");
+  }
+
+  void summaryFailed(String problemId, ApiError error) {
+    for (ObjectNode topic : s.all("topic", problemId)) {
+      String old = topic.path("markdown").asText();
+      String notice = "摘要生成未完成（" + error.code + "），来源已保存。\n\n";
+      if (!old.startsWith(notice)) {
+        topic.put("markdown", notice + old);
+        topic.put("revision", topic.path("revision").asInt() + 1);
+        topic.put("syncStatus", c.wikiConfigured() ? "pending" : "pending_configuration");
+        s.save("topic", topic);
+        if (c.wikiConfigured())
+          s.job("wiki", problemId, Json.obj("topicId", topic.path("id")), c.mode());
+      }
+    }
   }
 
   void sync(ObjectNode work) {

@@ -97,7 +97,8 @@ class Model {
             + " supports/contradicts/context，不得虚构引用。";
     String format =
         analysis
-            ? "返回 {discussions:[{title,reason,evidence}],memories:[{content,evidence}]}。无值得打扰的冲突时"
+            ? "返回 {topic:{title,viewpoints:string[],conditions:string[],uncertainties:string[],evidence:[]},discussions:[{title,reason,evidence}],memories:[{content,evidence}]}。topic"
+                  + " 必须综合本问题所给文章提炼观点、适用条件、不确定性及真实原文依据，相关资料归入一个主题。无值得打扰的冲突时"
                   + " discussions=[]；最多一个讨论、两条推断记忆；讨论或推断都必须有有效引用。"
             : "返回 {content:string,evidence:[],uncertainties:string[]}，建议解释理由、风险、可选行动和未知，保留本人最终决定。";
     ObjectNode payload =
@@ -111,7 +112,7 @@ class Model {
             "response_format",
             Json.obj("type", "json_object"),
             "max_tokens",
-            2000);
+            4000);
     try {
       JsonNode response =
           Upstream.post(
