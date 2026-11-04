@@ -31,3 +31,5 @@
 总控提供的集成地址：API http://127.0.0.1:8080/api/v1，网页 http://127.0.0.1:8088。E 可按 README 配对设备；未收到真实 device/token 前 C 不做真实上传。依赖安装与 CLI help 是当前实测证据，不等于 Pensieve 服务或真实 OCR 已通过。
 
 2026-11-04 17:42 +08:00 推送检查：代码主提交 0425b4f 已在远端；补充提交 c61d55c 已本地提交，连续多次 push 收到 GitHub remote Internal Server Error（含一次命令级代理路径），远端检查仍为 0425b4f。若无后续成功记录，总控可先集成该首版，本地分支包含最新空 OCR 修复与已安装依赖记录；无 force push。
+
+后续恢复：等待后重试成功，`cd4401e`（包含 `c61d55c`）已推送到 origin/feat/mvp-observer，上述 500 阻塞已解除。适配器最新 26 项测试/构建通过，Pensieve 独立环境 116 包 `uv pip check` 通过；仍未启动采集或验证真实通知。
