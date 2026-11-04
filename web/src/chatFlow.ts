@@ -288,7 +288,7 @@ export function useChatFlow(callbacks: {
         key,
         ...(selectedFiles.length ? { attachmentSnapshotKey: key } : {}),
         body: targetId
-          ? { content, sourceIds, thinking: selectedThinking }
+          ? { content, sourceIds: [...sourceIds], thinking: selectedThinking }
           : { content, thinking: selectedThinking },
       },
     };

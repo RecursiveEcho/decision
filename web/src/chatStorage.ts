@@ -47,6 +47,8 @@ export function readChatSession(owner: string): ChatSession {
     const validFiles = (v: unknown) =>
       Array.isArray(v) &&
       v.length <= 4 &&
+      v.reduce((total, file) => total + (file?.size || 0), 0) <=
+        16 * 1024 * 1024 &&
       v.every(
         (file) =>
           file &&

@@ -238,3 +238,15 @@ E部署cddb75f并确认根npm ci/28测试/build及资源逐字节匹配后，B�
 附件支持选取/粘贴/拖入PNG/JPEG/WebP和PDF/DOCX/XLSX/TXT/MD/CSV；图片归一化PNG/JPEG及尺寸限制，4个/单个8MiB/合计16MiB。文件仅显式发送时POST；原件与不可变发送快照放会话隔离IDB，sessionStorage只含metadata/key。档位off/low/high/max随每次发送冻结，刷新未知结果重用原bytes/key，202后只查询Job，失败重试复用后端附件。认证Blob预览/下载，不使用token URL；部分解析notice可见，退出/换消息回收URL；移除/成功后回收本机原件/快照。快照缺失不降级纯文本，允许明确停止本地等待并查历史，不自动新key重发。修复旧附件401晚到误注销新登录。
 
 截至21:56，构建与36项测试通过（原28 + 8项IDB/附件恢复、配额失败不POST、冲突恢复、会话隔离、过期响应、格式容量限制）。测试使用fake-indexeddb和合成响应，不算真实附件模型/自动记忆/决定验收。桌面/390有内容截图与真实后端联调待后续证据；尚未操作用户旧窗口/IAB8088。此提交先供E集成，未部署、不宣称完成全部验收。
+
+### 22:04 有内容界面与恢复验证
+
+E已审191ba07并合入，尚未更新8088，等待A后端统一部署。E目视桌面/390的多来源、图片/文档草稿、思考菜单和有原话记忆页通过，要求隐藏工程字段；B补丁仅留“用于其他对话/仅本次对话”和必要已忘记状态。手机附件改为单行横向滚动，输入dock由418px降为350px（含两行草稿），整页无横向溢出。
+
+独立5173真实浏览器+全拦截合成API验证：WebP转PNG（640px）/MD选取、CSV拖入、TXT粘贴达到4附件、图片Blob预览、移除、四档菜单、刷新恢复原话/两文件/high；两来源合并、同源2段引用全文可见，记忆页0输入表单且原话可展开。模拟HTTP未知结果后刷新继续发送，两次请求完整body及key完全一致，sessionStorage无base64。退出后session/chat均null，当前owner IDB条目0、DOM Blob引用0。真实业务写入0，此测试不算模型附件识别或自动记忆/决定验收。
+
+截图均在本机忽略目录web/output/playwright/attachments-*.png，未上传公开库；content-desktop/mobile、thinking-desktop/mobile、memory-desktop/mobile、source-mobile、preview-mobile为有效有内容样本。脚本最初错误选择器和HMR导致等待超时已纠正后重跑，不计通过证据。36测试与构建通过；最终生产只读及限定真实调用等待E通知。
+
+### 22:06 末轮只读复审
+
+独立审查确认附件缺失退出等待、按引用回收、旧401 owner保护三项已修。全局记忆页包含其他问题的局部记忆，因此范围用“仅用于原对话”，不错误声称“本次对话”；旧inferred/observed保留必要“推断，未由你确认/观察所得”提示，普通本人事实不暴露kind/版本。自有替身浏览器已退出，清session/chat/当前owner IDB、Cookie及路由，恢复viewport=null并关闭；用户窗口未动。真实联调待E统一部署ready通知。
