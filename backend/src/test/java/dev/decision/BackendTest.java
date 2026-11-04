@@ -168,6 +168,331 @@ class BackendTest {
   }
 
   @Test
+  void conversationCreatesAtomicallyAndIdempotentlyWithoutInventingFacts() throws Exception {
+    String key = Json.id();
+    ObjectNode body = Json.obj("content", "最近有点累，不知道从哪里开始。先陪我理理。 ");
+    JsonNode first =
+        req(post("/api/v1/conversations").header("Idempotency-Key", key), owner, body, 202);
+    JsonNode replay =
+        req(post("/api/v1/conversations").header("Idempotency-Key", key), owner, body, 202);
+    assertEquals(first, replay);
+    assertEquals("", first.path("problem").path("goal").asText());
+    assertTrue(first.path("problem").path("constraints").isEmpty());
+    assertTrue(first.path("problem").path("unknowns").isEmpty());
+    String p = first.path("problem").path("id").asText();
+    assertEquals(1, s.all("problem", null).size());
+    assertEquals(1, s.all("message", p).size());
+    assertEquals(body.path("content"), s.all("message", p).get(0).path("content"));
+    assertEquals(1, s.all("job", p).size());
+    assertTrue(s.all("memory", p).isEmpty());
+    assertTrue(s.all("source", p).isEmpty());
+    assertTrue(s.all("decision", p).isEmpty());
+    req(
+        post("/api/v1/conversations").header("Idempotency-Key", key),
+        owner,
+        Json.obj("content", "不同的原话"),
+        409);
+    postJson("/conversations", owner, Json.obj("content", " "), 400);
+    postJson("/conversations", owner, Json.obj("content", "字".repeat(12001)), 400);
+    postJson("/problems", owner, Json.obj("title", "旧入口", "goal", ""), 400);
+  }
+
+  @Test
+  void conversationQueueFullRollsBackProblemMessageAndIdempotencyKey() throws Exception {
+    String p = problem();
+    s.write(
+        () -> {
+          for (int i = 0; i < 200; i++) s.job("chat", p, Json.obj(), "real");
+          return null;
+        });
+    int keys = s.db.queryForObject("SELECT count(*) FROM idempotency_keys", Integer.class);
+    String key = Json.id();
+    ObjectNode body = Json.obj("content", "不应留下半个对话");
+    req(post("/api/v1/conversations").header("Idempotency-Key", key), owner, body, 429);
+    assertEquals(1, s.all("problem", null).size());
+    assertTrue(s.all("message", null).isEmpty());
+    assertEquals(keys, s.db.queryForObject("SELECT count(*) FROM idempotency_keys", Integer.class));
+    s.db.update("UPDATE jobs SET state='failed'");
+    req(post("/api/v1/conversations").header("Idempotency-Key", key), owner, body, 202);
+    assertEquals(2, s.all("problem", null).size());
+    assertEquals(1, s.all("message", null).size());
+  }
+
+  @Test
+  void firstAnswerNamesConversationInOneCallWithoutResettingHistory() throws Exception {
+    var calls = new java.util.concurrent.atomic.AtomicInteger();
+    var server =
+        modelServer(
+            request -> {
+              calls.incrementAndGet();
+              return Json.obj(
+                  "content",
+                  "先放下手头的事喝点水，今天先完成一件小事就好。",
+                  "evidence",
+                  Json.arr(),
+                  "uncertainties",
+                  Json.arr(),
+                  "conversationTitle",
+                  "整理疲惫的一天");
+            });
+    try {
+      long revision = s.version();
+      JsonNode start = postJson("/conversations", owner, Json.obj("content", "今天好累"), 202);
+      String p = start.path("problem").path("id").asText();
+      assertEquals(0, calls.get());
+      assertTrue(worker.runOne());
+      assertEquals("succeeded", job(start.path("job").path("id").asText()).path("status").asText());
+      assertEquals(1, calls.get());
+      assertEquals("整理疲惫的一天", s.get("problem", p).path("title").asText());
+      assertEquals("", s.get("problem", p).path("goal").asText());
+      assertEquals(revision, s.version());
+      assertEquals(2, model.context(p, Json.obj()).input().path("untrustedConversation").size());
+      assertTrue(s.all("memory", p).isEmpty());
+      assertTrue(s.all("decision", p).isEmpty());
+      assertFalse(s.get("problem", p).has("auto_title"));
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void optionalBadConversationTitlesNeverFailUsefulAnswer() throws Exception {
+    var candidate = new java.util.concurrent.atomic.AtomicReference<JsonNode>();
+    var server =
+        modelServer(
+            request -> {
+              ObjectNode answer =
+                  Json.obj(
+                      "content",
+                      "可以先做一件轻量的小事。",
+                      "evidence",
+                      Json.arr(),
+                      "uncertainties",
+                      Json.arr());
+              if (candidate.get() != null) answer.set("conversationTitle", candidate.get());
+              return answer;
+            });
+    try {
+      List<JsonNode> invalid = new ArrayList<>();
+      invalid.add(null);
+      invalid.addAll(
+          List.of(
+              Json.M.nullNode(),
+              Json.M.valueToTree(7),
+              Json.obj(),
+              Json.arr(),
+              Json.M.valueToTree(" "),
+              Json.M.valueToTree("长".repeat(81)),
+              Json.M.valueToTree("两行\n名称")));
+      for (JsonNode title : invalid) {
+        candidate.set(title);
+        JsonNode start = postJson("/conversations", owner, Json.obj("content", "无负担地开聊"), 202);
+        assertTrue(worker.runOne());
+        assertEquals(
+            "succeeded", job(start.path("job").path("id").asText()).path("status").asText());
+        assertEquals(
+            start.path("problem").path("title"),
+            s.get("problem", start.path("problem").path("id").asText()).path("title"));
+      }
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void manualRenameIsNeverReplacedAndOldChatsAreNotAutoNamed() throws Exception {
+    JsonNode start = postJson("/conversations", owner, Json.obj("content", "原始标题"), 202);
+    String p = start.path("problem").path("id").asText();
+    req(patch("/api/v1/problems/" + p), owner, Json.obj("title", "本人名称"), 200);
+    req(patch("/api/v1/problems/" + p), owner, Json.obj("title", "原始标题"), 200);
+    assertFalse(
+        s.db.queryForObject("SELECT auto_title FROM records WHERE id=?::uuid", Boolean.class, p));
+    assertTrue(worker.runOne());
+    assertEquals(
+        "CONTEXT_CHANGED",
+        job(start.path("job").path("id").asText()).path("error").path("code").asText());
+    var server =
+        modelServer(
+            request ->
+                Json.obj(
+                    "content",
+                    "继续原对话。",
+                    "evidence",
+                    Json.arr(),
+                    "uncertainties",
+                    Json.arr(),
+                    "conversationTitle",
+                    "模型不应覆盖的标题"));
+    try {
+      postJson("/problems/" + p + "/messages", owner, Json.obj("content", "继续聊"), 202);
+      assertTrue(worker.runOne());
+      assertEquals("原始标题", s.get("problem", p).path("title").asText());
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void failedFirstAnswerRetriesWithoutDuplicatingUserAndReusesOneChild() throws Exception {
+    JsonNode start = postJson("/conversations", owner, Json.obj("content", "失败也别让我重复说"), 202);
+    String p = start.path("problem").path("id").asText();
+    String failed = start.path("job").path("id").asText();
+    assertTrue(worker.runOne());
+    assertEquals("failed", job(failed).path("status").asText());
+    JsonNode retry = postJson("/jobs/" + failed + "/retry", owner, Json.obj(), 202);
+    assertEquals(
+        retry.path("id"),
+        postJson("/jobs/" + failed.toUpperCase(Locale.ROOT) + "/retry", owner, Json.obj(), 202)
+            .path("id"));
+    assertEquals(
+        retry.path("id"),
+        postJson("/jobs/" + failed + "/retry", owner, Json.obj(), 202).path("id"));
+    assertTrue(worker.runOne());
+    assertEquals("failed", job(retry.path("id").asText()).path("status").asText());
+    assertEquals(
+        retry.path("id"),
+        postJson("/jobs/" + failed + "/retry", owner, Json.obj(), 202).path("id"));
+    assertEquals(2, s.all("job", p).size());
+    assertEquals(1, s.all("message", p).size());
+    var server =
+        modelServer(
+            request ->
+                Json.obj(
+                    "content",
+                    "从一件小事开始。",
+                    "evidence",
+                    Json.arr(),
+                    "uncertainties",
+                    Json.arr(),
+                    "conversationTitle",
+                    "重新开始"));
+    try {
+      JsonNode next =
+          postJson("/jobs/" + retry.path("id").asText() + "/retry", owner, Json.obj(), 202);
+      assertTrue(worker.runOne());
+      JsonNode finished = job(next.path("id").asText());
+      assertEquals("succeeded", finished.path("status").asText());
+      assertEquals(
+          s.all("message", p).get(0).path("id"), finished.path("result").path("userMessageId"));
+      assertEquals(2, s.all("message", p).size());
+      assertEquals("重新开始", s.get("problem", p).path("title").asText());
+      assertEquals("failed", job(failed).path("status").asText());
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void retryRejectsInvalidStateBodyDeviceAndExpiredContext() throws Exception {
+    JsonNode start = postJson("/conversations", owner, Json.obj("content", "原话"), 202);
+    String failed = start.path("job").path("id").asText();
+    postJson("/jobs/" + failed + "/retry", owner, Json.obj(), 409);
+    assertTrue(worker.runOne());
+    postJson("/jobs/" + failed + "/retry", owner, Json.obj("unexpected", true), 400);
+    postJson("/jobs/" + failed + "/retry", device().path("deviceToken").asText(), Json.obj(), 403);
+    req(
+        patch("/api/v1/problems/" + start.path("problem").path("id").asText()),
+        owner,
+        Json.obj("goal", "本人新目标"),
+        200);
+    JsonNode error = postJson("/jobs/" + failed + "/retry", owner, Json.obj(), 409);
+    assertEquals("CONTEXT_CHANGED", error.path("error").path("code").asText());
+    JsonNode deleted = postJson("/conversations", owner, Json.obj("content", "待删除的合成原话"), 202);
+    assertTrue(worker.runOne());
+    s.write(
+        () -> {
+          s.delete(
+              "message",
+              s.all("message", deleted.path("problem").path("id").asText())
+                  .get(0)
+                  .path("id")
+                  .asText());
+          return null;
+        });
+    error =
+        postJson(
+            "/jobs/" + deleted.path("job").path("id").asText() + "/retry", owner, Json.obj(), 409);
+    assertEquals("CONTEXT_CHANGED", error.path("error").path("code").asText());
+    ObjectNode nonChat =
+        s.write(
+            () -> {
+              ObjectNode j =
+                  s.job("analysis", start.path("problem").path("id").asText(), Json.obj(), "real");
+              worker.fail(j.path("id").asText(), new ApiError(503, "SYNTHETIC", "合成失败"));
+              return j;
+            });
+    error = postJson("/jobs/" + nonChat.path("id").asText() + "/retry", owner, Json.obj(), 409);
+    assertEquals("JOB_NOT_RETRYABLE", error.path("error").path("code").asText());
+  }
+
+  @Test
+  void retryQueueFailureLeavesNoChildAndQueuedRetryStillChecksContext() throws Exception {
+    JsonNode start = postJson("/conversations", owner, Json.obj("content", "恢复原话"), 202);
+    String p = start.path("problem").path("id").asText();
+    String failed = start.path("job").path("id").asText();
+    assertTrue(worker.runOne());
+    s.write(
+        () -> {
+          for (int i = 0; i < 200; i++) s.job("chat", p, Json.obj(), "real");
+          return null;
+        });
+    String key = Json.id();
+    req(
+        post("/api/v1/jobs/" + failed + "/retry").header("Idempotency-Key", key),
+        owner,
+        Json.obj(),
+        429);
+    assertEquals(
+        0,
+        s.db.queryForObject(
+            "SELECT count(*) FROM jobs WHERE input->>'retryOfJobId'=?", Integer.class, failed));
+    s.db.update("UPDATE jobs SET state='failed'");
+    JsonNode retry =
+        req(
+            post("/api/v1/jobs/" + failed + "/retry").header("Idempotency-Key", key),
+            owner,
+            Json.obj(),
+            202);
+    assertEquals(
+        retry,
+        req(
+            post("/api/v1/jobs/" + failed + "/retry").header("Idempotency-Key", key),
+            owner,
+            Json.obj(),
+            202));
+    req(patch("/api/v1/problems/" + p), owner, Json.obj("goal", "新目标使排队原话失效"), 200);
+    assertEquals(
+        retry.path("id"),
+        postJson("/jobs/" + failed + "/retry", owner, Json.obj(), 202).path("id"));
+    assertTrue(worker.runOne());
+    assertEquals(
+        "CONTEXT_CHANGED", job(retry.path("id").asText()).path("error").path("code").asText());
+    assertEquals(1, s.all("message", p).size());
+  }
+
+  @Test
+  void concurrentRetryWithDifferentKeysCreatesOnlyOneChild() throws Exception {
+    JsonNode start = postJson("/conversations", owner, Json.obj("content", "并发恢复合成测试"), 202);
+    String failed = start.path("job").path("id").asText();
+    assertTrue(worker.runOne());
+    var pool = java.util.concurrent.Executors.newFixedThreadPool(4);
+    try {
+      var tasks = new ArrayList<java.util.concurrent.Callable<String>>();
+      for (int i = 0; i < 4; i++)
+        tasks.add(
+            () ->
+                postJson("/jobs/" + failed + "/retry", owner, Json.obj(), 202).path("id").asText());
+      Set<String> ids = new HashSet<>();
+      for (var result : pool.invokeAll(tasks)) ids.add(result.get());
+      assertEquals(1, ids.size());
+      assertEquals(1, s.all("message", start.path("problem").path("id").asText()).size());
+      assertEquals(2, s.all("job", start.path("problem").path("id").asText()).size());
+    } finally {
+      pool.shutdownNow();
+    }
+  }
+
+  @Test
   void summariesMergeSourcesAndKeepRevisionHistory() throws Exception {
     var server = modelServer(this::syntheticSummary);
     try {
@@ -241,20 +566,29 @@ class BackendTest {
   void followupReceivesPriorAssistantAnswerAsUntrustedConversation() throws Exception {
     String p = problem();
     var inputs = new ArrayList<JsonNode>();
-    var server = modelServer(request -> {
-      inputs.add(Json.parse(request.path("messages").get(1).path("content").asText()));
-      return Json.obj("content", "第一点先核实预算。第二点采用虚构的蓝盒方案。",
-          "evidence", Json.arr(), "uncertainties", Json.arr());
-    });
+    var server =
+        modelServer(
+            request -> {
+              inputs.add(Json.parse(request.path("messages").get(1).path("content").asText()));
+              return Json.obj(
+                  "content",
+                  "第一点先核实预算。第二点采用虚构的蓝盒方案。",
+                  "evidence",
+                  Json.arr(),
+                  "uncertainties",
+                  Json.arr());
+            });
     try {
       postJson("/problems/" + p + "/messages", owner, Json.obj("content", "给出两点合成建议"), 202);
       assertTrue(worker.runOne());
       postJson("/problems/" + p + "/messages", owner, Json.obj("content", "展开你刚才的第二点"), 202);
       assertTrue(worker.runOne());
       assertEquals(2, inputs.size());
-      assertTrue(inputs.get(1).path("untrustedConversation").toString().contains("蓝盒方案"),
+      assertTrue(
+          inputs.get(1).path("untrustedConversation").toString().contains("蓝盒方案"),
           "A follow-up must receive the assistant answer it refers to");
-      assertTrue(inputs.get(1).path("untrustedSources").isEmpty(),
+      assertTrue(
+          inputs.get(1).path("untrustedSources").isEmpty(),
           "Historical assistant statements must not become source evidence");
       assertEquals(4, s.all("message", p).size());
     } finally {
@@ -265,26 +599,47 @@ class BackendTest {
   @Test
   void correctedContextDoesNotResendOldUserOrAssistantHistory() throws Exception {
     var inputs = new ArrayList<JsonNode>();
-    var server = modelServer(request -> {
-      inputs.add(Json.parse(request.path("messages").get(1).path("content").asText()));
-      return Json.obj("content", "旧助手标记：这是合成的旧建议。", "evidence", Json.arr(),
-          "uncertainties", Json.arr());
-    });
+    var server =
+        modelServer(
+            request -> {
+              inputs.add(Json.parse(request.path("messages").get(1).path("content").asText()));
+              return Json.obj(
+                  "content",
+                  "旧助手标记：这是合成的旧建议。",
+                  "evidence",
+                  Json.arr(),
+                  "uncertainties",
+                  Json.arr());
+            });
     try {
-      for (String change : List.of("goal", "memory-correct", "memory-retract", "memory-delete", "source-delete")) {
+      for (String change :
+          List.of("goal", "memory-correct", "memory-retract", "memory-delete", "source-delete")) {
         String p = problem();
-        JsonNode memory = postJson("/memories", owner,
-            Json.obj("problemId", p, "kind", "user_reported", "content", "原合成记忆"), 201);
+        JsonNode memory =
+            postJson(
+                "/memories",
+                owner,
+                Json.obj("problemId", p, "kind", "user_reported", "content", "原合成记忆"),
+                201);
         String mid = memory.path("id").asText();
         String sid = memory.path("evidence").get(0).path("sourceId").asText();
         postJson("/problems/" + p + "/messages", owner, Json.obj("content", "旧用户标记：给个建议"), 202);
         assertTrue(worker.runOne());
         switch (change) {
-          case "goal" -> req(patch("/api/v1/problems/" + p), owner, Json.obj("goal", "更正合成目标"), 200);
-          case "memory-correct" -> req(patch("/api/v1/memories/" + mid), owner,
-              Json.obj("content", "更正合成记忆", "expectedRevision", 1), 200);
-          case "memory-retract" -> req(patch("/api/v1/memories/" + mid), owner,
-              Json.obj("status", "retracted", "expectedRevision", 1), 200);
+          case "goal" ->
+              req(patch("/api/v1/problems/" + p), owner, Json.obj("goal", "更正合成目标"), 200);
+          case "memory-correct" ->
+              req(
+                  patch("/api/v1/memories/" + mid),
+                  owner,
+                  Json.obj("content", "更正合成记忆", "expectedRevision", 1),
+                  200);
+          case "memory-retract" ->
+              req(
+                  patch("/api/v1/memories/" + mid),
+                  owner,
+                  Json.obj("status", "retracted", "expectedRevision", 1),
+                  200);
           case "memory-delete" -> req(delete("/api/v1/memories/" + mid), owner, null, 204);
           case "source-delete" -> req(delete("/api/v1/sources/" + sid), owner, null, 204);
           default -> fail("Unknown test change");
@@ -308,13 +663,16 @@ class BackendTest {
   void queuedChatAfterContextCorrectionFailsBeforeCallingModel() throws Exception {
     String p = problem();
     var calls = new java.util.concurrent.atomic.AtomicInteger();
-    var server = modelServer(request -> {
-      calls.incrementAndGet();
-      return Json.obj("content", "不得调用", "evidence", Json.arr(), "uncertainties", Json.arr());
-    });
+    var server =
+        modelServer(
+            request -> {
+              calls.incrementAndGet();
+              return Json.obj(
+                  "content", "不得调用", "evidence", Json.arr(), "uncertainties", Json.arr());
+            });
     try {
-      JsonNode queued = postJson("/problems/" + p + "/messages", owner,
-          Json.obj("content", "旧排队问题"), 202);
+      JsonNode queued =
+          postJson("/problems/" + p + "/messages", owner, Json.obj("content", "旧排队问题"), 202);
       req(patch("/api/v1/problems/" + p), owner, Json.obj("goal", "更正后的目标"), 200);
       assertTrue(worker.runOne());
       JsonNode actual = job(queued.path("id").asText());
@@ -330,20 +688,28 @@ class BackendTest {
   @Test
   void conversationHistoryIsBoundedScopedAndLegacyMessagesAreNotResent() throws Exception {
     String p = problem(), other = problem();
-    s.write(() -> {
-      ObjectNode legacy = s.create("message", p,
-          Json.obj("role", "assistant", "content", "迁移前已撤销的旧事实"));
-      s.db.update("UPDATE records SET context_revision=NULL WHERE id=?::uuid", legacy.path("id").asText());
-      s.create("message", other, Json.obj("role", "user", "content", "另一个问题的秘密标记"));
-      return null;
-    });
+    s.write(
+        () -> {
+          ObjectNode legacy =
+              s.create("message", p, Json.obj("role", "assistant", "content", "迁移前已撤销的旧事实"));
+          s.db.update(
+              "UPDATE records SET context_revision=NULL WHERE id=?::uuid",
+              legacy.path("id").asText());
+          s.create("message", other, Json.obj("role", "user", "content", "另一个问题的秘密标记"));
+          return null;
+        });
     String first = model.context(p, Json.obj()).input().toString();
     assertFalse(first.contains("迁移前已撤销的旧事实"));
     assertFalse(first.contains("另一个问题的秘密标记"));
     for (int i = 0; i < 18; i++) {
       final int n = i;
-      s.write(() -> s.create("message", p,
-          Json.obj("role", n % 2 == 0 ? "user" : "assistant", "content", "合成".repeat(4000))));
+      s.write(
+          () ->
+              s.create(
+                  "message",
+                  p,
+                  Json.obj(
+                      "role", n % 2 == 0 ? "user" : "assistant", "content", "合成".repeat(4000))));
     }
     JsonNode conversation = model.context(p, Json.obj()).input().path("untrustedConversation");
     assertFalse(conversation.isEmpty());
@@ -799,8 +1165,11 @@ class BackendTest {
     String deviceId = device.path("device").path("id").asText();
     String expiredDevice = auth.token("device:" + deviceId, Instant.now().minusSeconds(60));
     req(get("/api/v1/devices/" + deviceId + "/deliveries"), expiredDevice, null, 401);
-    postJson("/devices/" + deviceId + "/heartbeat", expiredDevice,
-        Json.obj("reportedState", "running"), 401);
+    postJson(
+        "/devices/" + deviceId + "/heartbeat",
+        expiredDevice,
+        Json.obj("reportedState", "running"),
+        401);
     assertEquals("paused", s.get("device", deviceId).path("reportedState").asText());
     JsonNode login =
         postJson("/auth/login", null, Json.obj("accessCode", "synthetic-owner-code"), 200);
@@ -1103,20 +1472,30 @@ class BackendTest {
         1,
         req(get("/api/v1/devices/" + id + "/deliveries"), token, null, 200).path("items").size());
     for (String state : List.of("read", "dismissed")) {
-      JsonNode changed = req(
-          patch("/api/v1/discussions/" + disc.path("id").asText()), owner,
-          Json.obj("status", state), 200);
+      JsonNode changed =
+          req(
+              patch("/api/v1/discussions/" + disc.path("id").asText()),
+              owner,
+              Json.obj("status", state),
+              200);
       assertEquals(state, changed.path("status").asText());
       assertTrue(changed.path("snoozeUntil").isNull());
       JsonNode refreshed = req(get("/api/v1/discussions").param("problemId", p), owner, null, 200);
       assertEquals(state, refreshed.path("items").get(0).path("status").asText());
-      assertEquals(0,
+      assertEquals(
+          0,
           req(get("/api/v1/devices/" + id + "/deliveries"), token, null, 200).path("items").size());
-      req(patch("/api/v1/discussions/" + disc.path("id").asText()), owner,
-          Json.obj("status", "unread"), 200);
+      req(
+          patch("/api/v1/discussions/" + disc.path("id").asText()),
+          owner,
+          Json.obj("status", "unread"),
+          200);
     }
-    req(patch("/api/v1/discussions/" + disc.path("id").asText()), owner,
-        Json.obj("status", "snoozed", "snoozeUntil", Instant.now().minusSeconds(60).toString()), 400);
+    req(
+        patch("/api/v1/discussions/" + disc.path("id").asText()),
+        owner,
+        Json.obj("status", "snoozed", "snoozeUntil", Instant.now().minusSeconds(60).toString()),
+        400);
     assertEquals("unread", s.get("discussion", disc.path("id").asText()).path("status").asText());
     req(
         patch("/api/v1/discussions/" + disc.path("id").asText()),

@@ -98,6 +98,25 @@ class Store {
     db.update("UPDATE context_version SET revision=revision+1 WHERE id=1");
   }
 
+  void requireCurrentUserMessage(String problemId, String messageId) {
+    boolean validId = true;
+    try {
+      Json.uuid(messageId);
+    } catch (ApiError e) {
+      validId = false;
+    }
+    if (!validId
+        || db.queryForObject(
+                "SELECT count(*) FROM records WHERE id=?::uuid AND problem_id=?::uuid AND"
+                    + " kind='message' AND NOT deleted AND data->>'role'='user' AND"
+                    + " context_revision=?",
+                Integer.class,
+                messageId,
+                problemId,
+                version())
+            != 1) throw new ApiError(409, "CONTEXT_CHANGED", "原话对应的资料或记忆已更正，请保留原话并调整后重新发送", true);
+  }
+
   ObjectNode job(String operation, String problemId, ObjectNode input, String mode) {
     if (db.queryForObject(
             "SELECT count(*) FROM jobs WHERE state IN ('queued','running')", Integer.class)
