@@ -45,13 +45,34 @@ source=call('GET','/sources/'+src['sourceId'])
 for e in assistant['evidence']:assert e['sourceId']==src['sourceId'] and e['quote'] in source['text']
 print(json.dumps({'event':'real_model_with_verified_evidence','evidenceCount':len(assistant['evidence'])}),flush=True)
 assert not call('GET','/decisions?problemId='+pid)['items'],'Model must not confirm decisions'
-for _ in range(100):
-    topics=call('GET','/topics?problemId='+pid)['items']
-    if topics and all(t['syncStatus']=='synced' for t in topics):break
-    if any(t['syncStatus']=='failed' for t in topics):raise RuntimeError('Wiki sync failed')
-    time.sleep(1)
-else:raise RuntimeError('Wiki sync not completed')
-print(json.dumps({'event':'wiki_synced_and_backend_readback_verified','topicCount':len(topics),'linksUseLoopback':all('127.0.0.1' in t['wikiUrl'] for t in topics)}),flush=True)
+def wait_summary():
+    for _ in range(180):
+        topics=call('GET','/topics?problemId='+pid)['items']
+        if any('摘要生成未完成' in t['markdown'] for t in topics):raise RuntimeError('Real topic synthesis failed; inspect analysis Job')
+        if any(t['syncStatus']=='failed' for t in topics):raise RuntimeError('Wiki sync failed')
+        if topics and all(t['syncStatus']=='synced' and '## 观点' in t['markdown'] and '## 适用条件' in t['markdown'] and '## 不确定性' in t['markdown'] for t in topics):return topics
+        time.sleep(1)
+    raise RuntimeError('Real summary and Wiki sync not completed')
+
+def wiki_readback(topic):
+    payload={'query':'query($id:Int!){pages{single(id:$id){content path}}}','variables':{'id':int(topic['wikiPageId'])}}
+    request=urllib.request.Request(config['WIKI_BASE_URL'].rstrip('/')+'/graphql',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json','Authorization':'Bearer '+config['WIKI_ACCESS_TOKEN']})
+    with opener.open(request,timeout=15) as response:data=json.load(response)
+    assert not data.get('errors'),'Wiki independent readback rejected'
+    assert data['data']['pages']['single']['content']==topic['markdown'],'Wiki content mismatch'
+
+topics=wait_summary();assert len(topics)==1;before=topics[0];assert before['evidence'];wiki_readback(before)
+print(json.dumps({'event':'real_model_topic_and_independent_wiki_readback','revision':before['revision']}),flush=True)
+second=job(call('POST','/sources',{'problemId':pid,'kind':'article','title':'合成验收补充文章','text':'此为第二份相关的虚构工程验收资料。方案乙每周两小时可以拆为四次二十分钟阅读，再留四十分钟讨论；这份方案只适用于章节短且可分割的虚构书。与第一篇文章相比，新增限制是不得占用本已预留的休息时间。作者认为必须核实书籍章节是否能拆分。'}))
+assert second['topicIds']==src['topicIds'],'Related sources must update the existing topic'
+topics=wait_summary();assert len(topics)==1;after=topics[0]
+assert after['id']==before['id'] and after['wikiPageId']==before['wikiPageId'],'Topic/Wiki identity changed'
+assert after['revision']>before['revision'] and after['markdown']!=before['markdown'],'Topic summary was not revised'
+assert any(e['sourceId']==second['sourceId'] for e in after['evidence']),'Updated summary has no evidence from new source'
+for e in after['evidence']:
+    actual_source=call('GET','/sources/'+e['sourceId']);assert e['quote'] in actual_source['text']
+wiki_readback(after)
+print(json.dumps({'event':'related_article_merged_and_real_wiki_updated','revision':after['revision'],'sameWikiPage':True,'evidenceCount':len(after['evidence'])}),flush=True)
 decision=call('POST','/decisions',{'problemId':pid,'choice':'仅为合成验收，暂选虚构方案乙','rationale':'保持虚构两小时时间约束','expectedOutcome':'验证记录和复盘链路','evidence':assistant['evidence']})
 call('POST','/decisions/'+decision['id']+'/reviews',{'outcome':'虚构验收结果','reflection':'原理由应保持不变'})
 actual=call('GET','/decisions?problemId='+pid)['items'][0]

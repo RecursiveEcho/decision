@@ -75,7 +75,7 @@ class Wiki {
       id = page.path("id").asInt();
     } else {
       String q =
-          "mutation($id:Int!,$content:String!,$title:String!){pages{update(id:$id,content:$content,title:$title){responseResult{succeeded}page{id"
+          "mutation($id:Int!,$content:String!,$title:String!){pages{update(id:$id,content:$content,title:$title,tags:[]){responseResult{succeeded}page{id"
               + " path}}}}";
       JsonNode result =
           query(q, Json.obj("id", id, "content", text, "title", topic.path("title")))
