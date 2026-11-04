@@ -104,6 +104,7 @@ async function act(fn: () => Promise<void>) {
   try {
     await fn();
   } catch (e) {
+    note.value = "";
     if (!(e instanceof ApiError && e.status === 499))
       error.value = e instanceof Error ? e.message : "操作失败";
   } finally {
@@ -257,6 +258,19 @@ async function ingest() {
     sourceTitle.value = "";
     sourceText.value = "";
     sourceUrl.value = "";
+    note.value = "资料已保存。摘要与 Wiki 同步可能仍在处理，请稍后刷新查看。";
+  });
+}
+async function reanalyze() {
+  await act(async () => {
+    try {
+      await job(`/problems/${selected.value}/analyze`, {});
+      note.value = "资料分析已完成；Wiki 同步状态请查看下方主题。";
+    } catch (failure) {
+      // Refresh topic status without replacing the original analysis error.
+      if (logged.value) await load().catch(() => {});
+      throw failure;
+    }
   });
 }
 async function showSource(id: string) {
@@ -553,6 +567,13 @@ onUnmounted(() => {
           </button>
         </article>
         <h2>知识主题</h2>
+        <div v-if="sources.length" class="card">
+          <p>
+            摘要未完成或资料、记忆有变化时，可重新分析已有资料，无需重复上传。Wiki
+            同步仅负责把已有主题写入 Wiki。
+          </p>
+          <button :disabled="busy" @click="reanalyze">重新分析资料</button>
+        </div>
         <p v-if="!topics.length" class="muted">暂无主题，等待资料处理。</p>
         <article v-for="t in topics" :key="t.id" class="card">
           <h3>{{ t.title }}</h3>
