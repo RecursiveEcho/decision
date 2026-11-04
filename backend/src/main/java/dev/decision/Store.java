@@ -35,11 +35,13 @@ class Store {
     if (!data.has("createdAt")) data.put("createdAt", now);
     if (!data.has("updatedAt")) data.put("updatedAt", now);
     db.update(
-        "INSERT INTO records(id,kind,problem_id,data) VALUES (?::uuid,?,?::uuid,?::jsonb)",
+        "INSERT INTO records(id,kind,problem_id,data,context_revision)"
+            + " VALUES (?::uuid,?,?::uuid,?::jsonb,?)",
         data.path("id").asText(),
         kind,
         problemId,
-        data.toString());
+        data.toString(),
+        kind.equals("message") ? version() : null);
     return data;
   }
 

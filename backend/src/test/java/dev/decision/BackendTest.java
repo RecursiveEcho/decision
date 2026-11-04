@@ -238,6 +238,123 @@ class BackendTest {
   }
 
   @Test
+  void followupReceivesPriorAssistantAnswerAsUntrustedConversation() throws Exception {
+    String p = problem();
+    var inputs = new ArrayList<JsonNode>();
+    var server = modelServer(request -> {
+      inputs.add(Json.parse(request.path("messages").get(1).path("content").asText()));
+      return Json.obj("content", "第一点先核实预算。第二点采用虚构的蓝盒方案。",
+          "evidence", Json.arr(), "uncertainties", Json.arr());
+    });
+    try {
+      postJson("/problems/" + p + "/messages", owner, Json.obj("content", "给出两点合成建议"), 202);
+      assertTrue(worker.runOne());
+      postJson("/problems/" + p + "/messages", owner, Json.obj("content", "展开你刚才的第二点"), 202);
+      assertTrue(worker.runOne());
+      assertEquals(2, inputs.size());
+      assertTrue(inputs.get(1).path("untrustedConversation").toString().contains("蓝盒方案"),
+          "A follow-up must receive the assistant answer it refers to");
+      assertTrue(inputs.get(1).path("untrustedSources").isEmpty(),
+          "Historical assistant statements must not become source evidence");
+      assertEquals(4, s.all("message", p).size());
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void correctedContextDoesNotResendOldUserOrAssistantHistory() throws Exception {
+    var inputs = new ArrayList<JsonNode>();
+    var server = modelServer(request -> {
+      inputs.add(Json.parse(request.path("messages").get(1).path("content").asText()));
+      return Json.obj("content", "旧助手标记：这是合成的旧建议。", "evidence", Json.arr(),
+          "uncertainties", Json.arr());
+    });
+    try {
+      for (String change : List.of("goal", "memory-correct", "memory-retract", "memory-delete", "source-delete")) {
+        String p = problem();
+        JsonNode memory = postJson("/memories", owner,
+            Json.obj("problemId", p, "kind", "user_reported", "content", "原合成记忆"), 201);
+        String mid = memory.path("id").asText();
+        String sid = memory.path("evidence").get(0).path("sourceId").asText();
+        postJson("/problems/" + p + "/messages", owner, Json.obj("content", "旧用户标记：给个建议"), 202);
+        assertTrue(worker.runOne());
+        switch (change) {
+          case "goal" -> req(patch("/api/v1/problems/" + p), owner, Json.obj("goal", "更正合成目标"), 200);
+          case "memory-correct" -> req(patch("/api/v1/memories/" + mid), owner,
+              Json.obj("content", "更正合成记忆", "expectedRevision", 1), 200);
+          case "memory-retract" -> req(patch("/api/v1/memories/" + mid), owner,
+              Json.obj("status", "retracted", "expectedRevision", 1), 200);
+          case "memory-delete" -> req(delete("/api/v1/memories/" + mid), owner, null, 204);
+          case "source-delete" -> req(delete("/api/v1/sources/" + sid), owner, null, 204);
+          default -> fail("Unknown test change");
+        }
+        postJson("/problems/" + p + "/messages", owner, Json.obj("content", "请依据当前信息重答"), 202);
+        assertTrue(worker.runOne());
+        String history = inputs.get(inputs.size() - 1).path("untrustedConversation").toString();
+        assertFalse(history.contains("旧用户标记"), change);
+        assertFalse(history.contains("旧助手标记"), change);
+        assertTrue(history.contains("请依据当前信息重答"), change);
+        JsonNode visible = req(get("/api/v1/problems/" + p + "/messages"), owner, null, 200);
+        assertEquals(4, visible.path("items").size(), "UI history remains available");
+        for (JsonNode message : visible.path("items")) assertFalse(message.has("context_revision"));
+      }
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void queuedChatAfterContextCorrectionFailsBeforeCallingModel() throws Exception {
+    String p = problem();
+    var calls = new java.util.concurrent.atomic.AtomicInteger();
+    var server = modelServer(request -> {
+      calls.incrementAndGet();
+      return Json.obj("content", "不得调用", "evidence", Json.arr(), "uncertainties", Json.arr());
+    });
+    try {
+      JsonNode queued = postJson("/problems/" + p + "/messages", owner,
+          Json.obj("content", "旧排队问题"), 202);
+      req(patch("/api/v1/problems/" + p), owner, Json.obj("goal", "更正后的目标"), 200);
+      assertTrue(worker.runOne());
+      JsonNode actual = job(queued.path("id").asText());
+      assertEquals("failed", actual.path("status").asText());
+      assertEquals("CONTEXT_CHANGED", actual.path("error").path("code").asText());
+      assertEquals(0, calls.get());
+      assertEquals(1, s.all("message", p).size());
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void conversationHistoryIsBoundedScopedAndLegacyMessagesAreNotResent() throws Exception {
+    String p = problem(), other = problem();
+    s.write(() -> {
+      ObjectNode legacy = s.create("message", p,
+          Json.obj("role", "assistant", "content", "迁移前已撤销的旧事实"));
+      s.db.update("UPDATE records SET context_revision=NULL WHERE id=?::uuid", legacy.path("id").asText());
+      s.create("message", other, Json.obj("role", "user", "content", "另一个问题的秘密标记"));
+      return null;
+    });
+    String first = model.context(p, Json.obj()).input().toString();
+    assertFalse(first.contains("迁移前已撤销的旧事实"));
+    assertFalse(first.contains("另一个问题的秘密标记"));
+    for (int i = 0; i < 18; i++) {
+      final int n = i;
+      s.write(() -> s.create("message", p,
+          Json.obj("role", n % 2 == 0 ? "user" : "assistant", "content", "合成".repeat(4000))));
+    }
+    JsonNode conversation = model.context(p, Json.obj()).input().path("untrustedConversation");
+    assertFalse(conversation.isEmpty());
+    assertTrue(conversation.size() <= 12);
+    int chars = 0;
+    for (JsonNode message : conversation) chars += message.path("content").asText().length();
+    assertTrue(chars <= 24000);
+    assertEquals(19, s.all("message", p).size(), "Bounding model input does not delete UI history");
+  }
+
+  @Test
   void contextCorrectionDuringModelCallRejectsStaleAnswer() throws Exception {
     String p = problem();
     var server =
