@@ -290,3 +290,13 @@ mutation开始立即清旧概览，完成重新获取原记录与投影；页面
 生产当前17原记录无active user_reported由E只读核实，应empty且0模型请求；真实positive归并由E隔离18080/18088链路准备，B待ready只读验证真实结果和生产空概览，不向本人profile新增测试偏好。入口44f0971已先部署，本提交供E合入最终概览版。
 
 E合入07f29b2并根47测试通过后，要求“查看全部”用原文短摘帮助定位，避免只有记录序号。B仅将该入口内每行改为标明“原记录”的前36字符预览，保留推断/观察/忘记标签；完整原文仍在详情，默认AI概览不裁剪、不改版式。类型构建通过，无新增模型或重复大场景。自有替身会话session/chat/overview均清空，Cookie/routes清理、viewport=null，浏览器及Vite已关闭；等待E真实隔离/生产ready后只读验收。
+
+### 真实隔离摘要展示、生产只读与最终清理（2026-11-05）
+
+E部署A127189b与Ba816c39后，B新建独立浏览器访问18088真实隔离服务，实际资源index-BMBa6mX3.js/index-c-QTqh33.css。E完成真实模型初次6 eligible→4点及忘记后4 eligible→3点，B只读现有ready缓存，不重复生成。UI实际3点、0默认管理按钮；近义2条绑定2refs并在一详情显示2条原文，另两点的不同problem预算/时间条件分开，refs与原记录完全对应。390默认与详情/全部页面无整页横向溢出，隔离usage.requests前后均2。
+
+“全部记录”实际7条而非初始预告8。B如实发现并回报；E确认先前PATCH撤回触发既有逻辑软删同问题1条derived inferred，接口返回7正常，未为凑数补记录/调用模型。详情正确展示的真实截图memory-real-desktop/mobile/detail-mobile/all-mobile.png仅本机忽略目录。
+
+生产8088实际empty/eligible0/default0点，原记录17条在查看全部可达；usage.requests前后均36，无摘要POST。新对话资料入口在桌面/折叠/390三次均打开全局sources/topics（无problemId）、0添加表/0重分析；仅本机输入合成草稿并选合成PNG不发送，max档与附件/草稿往返均保留。两环境审计仅GET业务请求、0非GET尝试、0pageerror。登录仅认证，不计模型或业务写入；未修改本人profile。生产空态截图memory-production-empty.png不含原记录正文。
+
+已退出并关闭两个自有浏览器decision-b-memory-real/prod：各自session/chat/overview键null、当前owner IDB0、DOM Blob0，清Cookie与路由、viewport=null；用户旧窗口/IAB未动，E的18080/18088服务进程未动。B独立Vite此前已停。详细证据memory-overview-real-evidence.json仅本机忽略目录，未提交记录全文、凭据或截图。本轮B开发/推送/真实只读展示和清理全部完成，不再追加模型或扩Wiki流程。
