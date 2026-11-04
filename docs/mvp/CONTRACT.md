@@ -40,7 +40,7 @@
 | POST `/auth/login` | `{accessCode}` | `{accessToken,expiresAt}`；失败限速；账号状态固定本人 |
 | GET `/status` | 无 | `{model:{configured,lastCallStatus},wiki:{configured,status},observer:{lastSeenAt},usage:{requests,inputTokens,outputTokens,costEstimate:null|number,currency:null|string}}`；不返回任何 key |
 | POST `/conversations` | `{content}`（非空，最多12000字符），owner token、Idempotency-Key | 202 `{problem:Problem,job:Job}`；原子创建对话、首条user消息和chat Job；同key同payload返回同problem/job，不增加消息；初始goal为空串，constraints/unknowns为空，title安全截取首句兜底 |
-| POST `/jobs/{id}/retry` | `{}`，owner token、Idempotency-Key | 202 chat Job；仅failed chat可重试，复用原userMessageId，不重复用户消息；每个失败Job最多派生一个retry Job，重复请求返回同一个。已派生retry失败后客户端针对新failed Job重试；非failed/nonchat返回409 JOB_NOT_RETRYABLE，原消息已失效/删除返回409 CONTEXT_CHANGED |
+| POST `/jobs/{id}/retry` | `{}`，owner token、Idempotency-Key | 202 chat Job；仅failed chat可重试，复用原userMessageId，不重复用户消息；每个失败Job最多派生一个retry Job，重复请求返回同一个。已派生retry失败后客户端针对新failed Job重试；非failed/nonchat返回409 JOB_NOT_RETRYABLE，新派生时原消息已失效/删除返回409 CONTEXT_CHANGED；已有派生只返回历史Job，不重新生成 |
 | POST `/problems` | `{title,goal,constraints?:[],unknowns?:[]}` | 201 Problem |
 | GET `/problems` | `cursor,limit` | Problem 列表，updatedAt 降序 |
 | PATCH `/problems/{id}` | `{title?,goal?,constraints?,unknowns?}` | Problem；旧目标保留内部历史 |
@@ -114,7 +114,7 @@ A 至少建立 problems、sources、messages、jobs、memories（含 revision hi
 - 网页新用户、空列表和“新对话”默认直接输入困扰。标题/目标/限制/未知不是发送前置条件；旧`POST /problems`继续保持原请求校验兼容旧客户端。
 - `/conversations`不调用模型后再建档：先在同一事务保存Problem+user Message+chat Job，立即202；Problem仍是旧实体，其中goal允许在新入口为空。不得把整段吐槽擅自当作已确认目标或本人记忆。
 - 首个chat Job与普通chat走同一模型调用；首答内部可选`conversationTitle`仅用于自动显示名称，空白/非字符串/过长等异常不能使正文失败。仅首个新对话Job（包括其显式失败重试）可更新自动标题；标题更新不bump上下文版本，不覆盖随后本人手改的标题。旧对话不被重命名。
-- 聊天提示：先给简短、贴合困扰的帮助或能做的小步骤；确需澄清时至多一个关键问题，允许用户先说不清；不要求填标题/目标/限制表或先上传资料。可以给明确标为一般建议的推理，不能编造来源/用户目标/最新外部事实，不把推断写成user_reported。无来源允许evidence=[]。
+- 聊天提示：先给简短、贴合困扰的帮助或能做的小步骤；确需澄清时至多一个关键问题，允许用户先说不清；不要求填标题/目标/限制表或先上传资料。AI能代写、归纳、比较、拆解的，先给可用草稿/框架/初步判断，不把列清单、写提纲等可代劳工作再布置给用户；缺关键内容只问能推进的一项事实，不编造缺失的真实材料。代拟事实只能来自用户或当前来源明确给定内容，未知省略或原位待确认；建议和推断在出现处标明，不能靠末尾不确定性抵消正文断言。普通疲惫且无明确任务时，2至3个短句、最多一个易答问题，不要求三行/清单/分类整理。可以给明确标为一般建议的推理，不能编造来源/用户目标/最新外部事实，不把推断写成user_reported。无来源允许evidence=[]。
 - 本轮整理在对话正文自然呈现；不自动写回goal/constraints/unknowns或本人记忆，不因此新增事实判定机制。可选信息与既有工具折叠保留，不能阻挡开聊。
 - 前端需区分未确定HTTP结果、已创建且Job在途、Job失败。首次发送稳定保存同一content/key快照，跨点击重试同payload同key；已拿到202后复用同problem和Job，不重POST创建。刷新可恢复已知Job轮询；退出清除本轮暂存。模型失败用“重试回答”调用新retry接口，正常重试不复制用户气泡；上下文已变更时明确保留原话供用户调整，不能让旧事实复活。
 - 202外层结构在首句返回后即用于选择问题/展示首条用户话；Job完成后刷新problems+messages获取自动标题和回答。所有写入仍只由本人点击发送/重试或既有显式操作触发，不自动确认决定/发通知/开采集。
