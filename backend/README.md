@@ -96,3 +96,15 @@ owner `GET /memories/overview?problemId=` 只读返回当前指纹与 empty/miss
 `POST /memories/overview {fingerprint,problemId?,retry?:true}` 需幂等键，统一202仅返回任务元信息。指纹过期返回409 OVERVIEW_CHANGED；空集不建任务，已有在途/成功/失败复用，失败同指纹不自动重试。仅显式retry且错误可重试时重新生成；新幂等键的并发请求也复用在途任务。旧幂等响应不含摘要，且请求在重放前仍校验当前指纹。
 
 独立memory_overview Job在现有Job结果保存缓存，无新表/环境项；只读投影不写回事实、不改聊天检索。指纹包括全部eligible记忆内容/版本/作用域及模型/模式/摘要版本，不仅是输入预算内的部分。生成提交前和GET均校验当前指纹，纠正/遗忘后旧摘要不可返回，GET jobs仅返回指纹元信息不返回items。模型调用在事务锁外，off/2500输出token/30秒总超时，沿用调用用量记录；排队概览优先级低于正常任务，已有模型请求不抢占。模型摘要语义仍需真实验收，引用与版本校验不能证明任意概括都准确。
+
+## 讨论后确认知识
+
+独立 `knowledge_entry` / `knowledge_proposal` 保存于现有 records，V8 仅扩展 kind 约束与提案在途唯一索引，不回填旧 Topic，不自动升级旧资料。旧来源分析与 Wiki 同步不会覆盖正式知识。
+
+本人点击 `POST /problems/{id}/knowledge-proposals {}` 后生成 `knowledge_proposal` Job，模型在锁外提出 create / merge / revise / skip。近期至多24条当前 context_revision / memory_epoch 对话文字、至多8条正式资料，以及跨对话相关性排序的至多12条已确认知识受各自字符预算约束；coverage 披露总数、实际条数、过滤/截断和不读取原始附件的范围。对照不等于完整冲突检测。引用区分 user/assistant 消息与正式 source，引用文字必须逐字来自真实提供内容；助手发言不是事实证明，附件不能冒充 source。
+
+提案显示完整拟保存正文、理由、分类、目标版本和出处；继续讨论后可以重新整理。`accept {expectedTargetRevision}` 只接受服务端持久提案，事务内核对完整上下文指纹、目标 revision 和出处，保存旧版本、写知识并接受提案。不同幂等键再次确认也不会新建或重复修订；skip/已略过提案不能接受。对话、来源、记忆上下文或已有知识改变时返回 `409 KNOWLEDGE_CHANGED`，原提案保留。接受不 bump 全局聊天 revision，不使当前对话文字突然失效。
+
+`GET /knowledge-entries`、详情与 `/history` 提供正式知识及历史；`GET /knowledge-proposals` 可按 problemId 筛选；`GET /knowledge-export` 在一致快照只导出正式知识、旧版本、领域与实际引用片段，供 E 的本机 Obsidian helper 增量处理。未确认提案、全部聊天、个人记忆、原件和密钥不导出。出处已不可用时保留确认时引用并明确标注；聊天检索不使用这类无效出处条目。正常聊天只读检索最多6条、每条至多3000字符知识及当前有效待审提案，不会自动确认入库。
+
+没有新增环境变量或云服务；模型使用现有 DeepSeek 配置，单次 off / 6000输出token / 60秒，记录实际调用元信息。HTTP替身与隔离PG测试不代表真实模型、Obsidian文件同步或UI已验收；由 E 统一集成和验证。

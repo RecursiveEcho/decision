@@ -20,13 +20,15 @@ class Api {
   final Auth auth;
   final Config c;
   final MemoryOverview overview;
+  final Knowledge knowledge;
 
-  Api(Domain d, Store s, Auth a, Config c, MemoryOverview overview) {
+  Api(Domain d, Store s, Auth a, Config c, MemoryOverview overview, Knowledge knowledge) {
     this.d = d;
     this.s = s;
     auth = a;
     this.c = c;
     this.overview = overview;
+    this.knowledge = knowledge;
   }
 
   String who(HttpServletRequest r) {
@@ -242,6 +244,64 @@ class Api {
   @PostMapping("/topics/{id}/sync")
   ResponseEntity<?> sync(@PathVariable String id, @RequestBody JsonNode b, HttpServletRequest r) {
     return post(r, b, 202, () -> d.sync(id));
+  }
+
+  @PostMapping("/problems/{id}/knowledge-proposals")
+  ResponseEntity<?> knowledgeProposal(
+      @PathVariable String id, @RequestBody JsonNode b, HttpServletRequest r) {
+    return post(r, b, 202, () -> knowledge.request(id, b));
+  }
+
+  @GetMapping("/knowledge-proposals")
+  ObjectNode knowledgeProposals(
+      @RequestParam(required = false) String problemId,
+      @RequestParam(required = false) String cursor,
+      @RequestParam(defaultValue = "30") int limit) {
+    if (problemId != null) s.get("problem", problemId);
+    return d.page(
+        s.all("knowledge_proposal", problemId),
+        "updatedAt",
+        cursor,
+        limit,
+        "knowledge-proposals:" + problemId);
+  }
+
+  @GetMapping("/knowledge-proposals/{id}")
+  ObjectNode knowledgeProposal(@PathVariable String id) {
+    return s.get("knowledge_proposal", id);
+  }
+
+  @PostMapping("/knowledge-proposals/{id}/accept")
+  ResponseEntity<?> acceptKnowledge(
+      @PathVariable String id, @RequestBody JsonNode b, HttpServletRequest r) {
+    return post(r, b, 200, () -> knowledge.accept(id, b));
+  }
+
+  @PostMapping("/knowledge-proposals/{id}/dismiss")
+  ResponseEntity<?> dismissKnowledge(
+      @PathVariable String id, @RequestBody JsonNode b, HttpServletRequest r) {
+    return post(r, b, 200, () -> knowledge.dismiss(id, b));
+  }
+
+  @GetMapping("/knowledge-entries")
+  ObjectNode knowledgeEntries(
+      @RequestParam(required = false) String cursor, @RequestParam(defaultValue = "30") int limit) {
+    return d.page(s.all("knowledge_entry", null), "updatedAt", cursor, limit, "knowledge-entries");
+  }
+
+  @GetMapping("/knowledge-entries/{id}")
+  ObjectNode knowledgeEntry(@PathVariable String id) {
+    return s.get("knowledge_entry", id);
+  }
+
+  @GetMapping("/knowledge-entries/{id}/history")
+  ObjectNode knowledgeHistory(@PathVariable String id) {
+    return knowledge.history(id);
+  }
+
+  @GetMapping("/knowledge-export")
+  ObjectNode knowledgeExport() {
+    return knowledge.export();
   }
 
   @PatchMapping("/discussions/{id}")

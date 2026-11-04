@@ -18,6 +18,7 @@ class Worker {
   final Wiki wiki;
   final Evidence evidence;
   final MemoryOverview overview;
+  final Knowledge knowledge;
 
   @Value("${app.worker-enabled}")
   boolean enabled;
@@ -31,7 +32,8 @@ class Worker {
       Model model,
       Wiki wiki,
       Evidence evidence,
-      MemoryOverview overview) {
+      MemoryOverview overview,
+      Knowledge knowledge) {
     this.s = s;
     this.c = c;
     this.d = d;
@@ -39,6 +41,7 @@ class Worker {
     this.wiki = wiki;
     this.evidence = evidence;
     this.overview = overview;
+    this.knowledge = knowledge;
   }
 
   @EventListener(ApplicationReadyEvent.class)
@@ -94,6 +97,7 @@ class Worker {
         case "analysis" -> analyze(work);
         case "wiki" -> sync(work);
         case "memory_overview" -> overview.run(work);
+        case "knowledge_proposal" -> knowledge.run(work);
         default -> throw new ApiError(400, "UNKNOWN_JOB", "未知任务类型");
       }
     } catch (ApiError e) {
