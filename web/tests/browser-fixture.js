@@ -21,6 +21,7 @@ async (page) => {
     originUrl: "javascript:alert(1)",
     capturedAt: new Date().toISOString(),
   };
+  let devices = [];
   let messages = [],
     decisions = [],
     reviews = [],
@@ -143,18 +144,24 @@ async (page) => {
           currency: null,
         },
       };
-    else if (path === "/devices")
-      data = rows([
-        {
-          id: "dev1",
-          name: "测试设备",
+    else if (path === "/devices") {
+      if (method === "GET") data = rows(devices);
+      else {
+        if (Object.keys(body).join() !== "name")
+          throw new Error("Registration must only send name");
+        const device = {
+          id: `33333333-3333-4333-8333-${String(devices.length + 1).padStart(12, "0")}`,
+          name: body.name,
           desiredState: "paused",
-          reportedState: "offline",
+          reportedState: "paused",
           lastHeartbeatAt: null,
           lastError: null,
-        },
-      ]);
-    else if (path === "/devices/dev1") data = { id: "dev1", ...body };
+        };
+        devices.push(device);
+        data = { device, deviceToken: "fixture-device-token-only" };
+        status = 201;
+      }
+    } else if (path === "/devices/dev1") data = { id: "dev1", ...body };
     else {
       status = 503;
       data = { error: { message: "契约测试未配置此操作" } };
@@ -165,4 +172,4 @@ async (page) => {
       body: JSON.stringify(data),
     });
   });
-};
+}

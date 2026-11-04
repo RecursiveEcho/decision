@@ -43,3 +43,13 @@ Playwright CLI 实际浏览器 + 明确契约替身（`web/tests/browser-fixture
 已移除浏览器 API 拦截并退出测试会话，真实请求因 8080 后端未启动返回代理 500，登录页明确显示“请求未完成（500）”；没有伪造成功。真实 API/持久化仍为阻塞。
 
 本地 Vite 开发进程当前运行于 127.0.0.1:5173，可查看登录页；并非上线地址。需要关闭时终止本次 `npm run dev` 进程；再次启动参见 web/README.md。浏览器测试会话已关闭，产品代码没有测试路由。
+
+## 设备注册入口补齐（2026-11-04 17:47 开始，17:50 +08:00 实现与自检完成）
+
+E 指出 C 适配器仅接受已有设备凭据，旧空状态提示导致用户无入口。独立只读审查通过后，新增 `web/src/DeviceRegistration.vue` 并接入“服务与观察”。名称必填，复用 API client 的 POST /devices 和幂等键；注册响应的 device 直接更新列表，不因额外列表查询失败丢失一次性凭据。
+
+设备 ID / deviceToken 仅在当前组件内存显示，支持逐项复制、手动选择兜底和明确关闭。关闭、离开该页、退出登录时清除；未写入 session/local storage、未将 token 发给父组件或日志。文案提醒只存本机私有配置、不是模型 key、关闭后遗失需重注册。没有调用 PATCH running，注册不启动观察。
+
+验证：`npm run build` 和 `npm test`（6/6）通过。Playwright 实际浏览器使用明确契约替身：POST /devices 返回 201；请求只有 name 且带幂等键；网络列表无 PATCH；注册后 desiredState/reportedState 均 paused；令牌复制成功；关闭和页面切换后凭据输入域消失，session/local storage 均无 deviceToken。退出登录清除也单独检查。以上均为客户端替身证据，真实 API/真实观察仍待 E 提供服务后联调。
+
+另修复浏览器 fixture 经格式化后末尾分号不兼容 Playwright CLI run-code 的问题，加入 web/.prettierignore 保持该函数输入可执行。不修改共享接口或根部署配置。
