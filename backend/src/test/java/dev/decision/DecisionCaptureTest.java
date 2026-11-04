@@ -122,6 +122,34 @@ class DecisionCaptureTest {
   }
 
   @Test
+  void leadingTimeAdverbsAllowNaturalDecisionsWithoutWeakeningNegation() {
+    for (String prefix : List.of("这次", "这回", "今天", "现在", "明天", "接下来")) {
+      String text = prefix + "我决定买白桦款笔记本，因为它是点阵内页。";
+      ObjectNode result =
+          capture.capture(
+              problem, message(text), candidate(text, "买白桦款笔记本").put("rationale", "它是点阵内页"));
+      assertNotNull(result, text);
+      assertEquals("买白桦款笔记本", result.path("choice").asText());
+      assertEquals("它是点阵内页", result.path("rationale").asText());
+    }
+    for (String text :
+        List.of(
+            "并非这次我决定买白桦款笔记本。",
+            "他说：这次我决定买白桦款笔记本。",
+            "如果有钱，这次我决定买白桦款笔记本。",
+            "“这次我决定买白桦款笔记本。”",
+            "这次我决定买白桦款笔记本吗？")) {
+      assertNull(
+          capture.capture(problem, message(text), candidate("这次我决定买白桦款笔记本", "买白桦款笔记本")), text);
+    }
+    String negative = "这次我决定不买车";
+    assertNull(capture.capture(problem, message(negative), candidate(negative, "买车")));
+    ObjectNode valid = capture.capture(problem, message(negative), candidate(negative, "不买车"));
+    assertNotNull(valid);
+    assertEquals("不买车", valid.path("choice").asText());
+  }
+
+  @Test
   void rejectsSyntheticThirdPartyTentativeConditionalQuotedAndQuestionStatements() {
     List<String> messages =
         List.of(

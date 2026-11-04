@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 class DecisionCapture {
   private static final Pattern COMMITMENT =
       Pattern.compile(
-          "(?:^|[，,：:\\s])(?:我(?:现在|已经|最终|还是|确定|正式|明确|就|这次)?(?:决定|选择|选定|选|承诺)|就(?:选|定|用)|I(?:"
+          "(?:^|[，,：:\\s])(?:(?:(?:这次|这回|今天|今晚|明天|现在|接下来|今后|以后|从现在起)\\s*)?我(?:现在|已经|最终|还是|确定|正式|明确|就|这次)?(?:决定|选择|选定|选|承诺)|就(?:选|定|用)|I(?:"
               + " have)? (?:decided|choose|will)|I['’]ve decided)",
           Pattern.CASE_INSENSITIVE);
   private static final Pattern SYNTHETIC =
@@ -51,8 +51,8 @@ class DecisionCapture {
   }
 
   static String prompt() {
-    return "可选返回decisionCandidate:{choice,quote,rationale?,expectedOutcome?,supersedesId?}，仅当当前用户原话明确表达本人已作出的选择或承诺。"
-               + "quote必须是当前原话中包含明确选择的完整原句，choice保留承诺动词后完整选择对象和全部否定/对比词，不得从不买车截成买车，不自由改写。"
+    return "当前用户原话明确表达本人已作出的选择或承诺时，返回decisionCandidate:{choice,quote,rationale?,expectedOutcome?,supersedesId?}；不符合则省略。"
+               + "quote必须是当前原话中包含明确选择的完整原句，choice保留承诺动词后完整行动及选择对象（购买/采用等行动动词也保留）和全部否定/对比词，不得从不买车截成买车，不自由改写。"
                + "疑问、犹豫、假设、建议、第三人、转述、引号中的话、合成或虚构场景、附件和历史助手内容不能作为本人决定。"
                + "未明确说出的理由和预期省略；提供时也只能逐字摘取当前原话。只有用户明确改口时，才可用supersedesId指向当前问题已有的自动决定。"
                + "不要在content声称已经保存决定；服务端验证并实际保存后才会显示记录。没有明确选择时省略decisionCandidate。";
