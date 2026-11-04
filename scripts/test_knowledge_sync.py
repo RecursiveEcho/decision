@@ -45,7 +45,7 @@ class MirrorTest(unittest.TestCase):
         data['generatedAt'] = 'later'
         self.assertEqual(0, sync.sync_snapshot(data, self.vault)['changedFiles'])
         self.assertEqual(files, {p: p.stat().st_mtime_ns for p in files})
-        note = (self.vault / sync.entry_path(E1)).read_text()
+        note = (self.vault / sync.entry_path(E1, '虚构缓存条件')).read_text()
         self.assertIn('非事实证明', note)
         self.assertIn(sync.domain_path('软件设计')[:-3], note)
 
@@ -56,10 +56,11 @@ class MirrorTest(unittest.TestCase):
         data['entries'][0].update(title='修订后的虚构条件', revision=2)
         data['histories'] = [{'entryId': E1, 'versions': [old]}]
         sync.sync_snapshot(data, self.vault)
-        self.assertTrue((self.vault / sync.entry_path(E1)).is_file())
-        history = (self.vault / sync.history_path(E1, 1)).read_text()
+        self.assertTrue((self.vault / sync.entry_path(E1, '修订后的虚构条件')).is_file())
+        self.assertFalse((self.vault / sync.entry_path(E1, '虚构缓存条件')).exists())
+        history = (self.vault / sync.history_path(E1, 1, '虚构缓存条件')).read_text()
         self.assertIn('虚构缓存条件', history)
-        self.assertIn(sync.entry_path(E1)[:-3], history)
+        self.assertIn(sync.entry_path(E1, '修订后的虚构条件')[:-3], history)
 
     def test_unmanaged_file_preserved_but_collision_refused(self):
         self.vault.mkdir()
@@ -78,7 +79,7 @@ class MirrorTest(unittest.TestCase):
     def test_manual_change_blocks_all_overwrite_and_delete(self):
         data = fixture()
         sync.sync_snapshot(data, self.vault)
-        path = self.vault / sync.entry_path(E1)
+        path = self.vault / sync.entry_path(E1, '虚构缓存条件')
         path.write_text('手动修改')
         dashboard = (self.vault / '知识总览.md').read_bytes()
         with self.assertRaises(sync.SyncError):
@@ -131,13 +132,13 @@ class MirrorTest(unittest.TestCase):
         data['entries'][0]['domains'] = ['../../outside/危险']
         sync.sync_snapshot(data, self.vault)
         self.assertFalse((self.root / 'outside').exists())
-        self.assertEqual(1, len(list((self.vault / '领域').glob('*.md'))))
+        self.assertEqual(1, len(list((self.vault / '领域').rglob('*.md'))))
 
     def test_remote_images_html_and_attachment_embeds_not_carried(self):
         data = fixture()
         data['entries'][0]['markdown'] = '![跟踪](https://example.invalid/x) <script>bad</script> ![[private.png]]'
         sync.sync_snapshot(data, self.vault)
-        note = (self.vault / sync.entry_path(E1)).read_text()
+        note = (self.vault / sync.entry_path(E1, '虚构缓存条件')).read_text()
         self.assertNotIn('https://example.invalid', note)
         self.assertNotIn('<script>', note)
         self.assertNotIn('![[', note)
@@ -155,7 +156,7 @@ class MirrorTest(unittest.TestCase):
         data = fixture()
         sync.sync_snapshot(data, self.vault)
         original = sync.atomic_write
-        path = self.vault / sync.entry_path(E1)
+        path = self.vault / sync.entry_path(E1, '虚构缓存条件')
 
         def mutate_after_preflight(target, content):
             result = original(target, content)
@@ -230,7 +231,18 @@ class MirrorTest(unittest.TestCase):
             with self.assertRaises(OSError):
                 sync.sync_snapshot(data, self.vault)
         sync.sync_snapshot(data, self.vault)
-        self.assertIn('新版', (self.vault / sync.entry_path(E1)).read_text())
+        self.assertIn('新版', (self.vault / sync.entry_path(E1, '新版')).read_text())
+
+    def test_graph_node_filenames_are_readable_and_all_generated_links_resolve(self):
+        data = fixture()
+        data['entries'][0]['title'] = '含有 / 路径 .. [符号] 和 List<String> 的知识'
+        files = sync.render(data)
+        import re
+        for path, content in files.items():
+            self.assertTrue(sync.managed_name(path))
+            self.assertNotRegex(Path(path).stem, r'^[0-9a-f-]{24,}$')
+            for target in re.findall(r'\[\[([^]|]+)(?:\|[^]]*)?\]\]', content.decode()):
+                self.assertIn(target + '.md', files)
 
 
 if __name__ == '__main__':

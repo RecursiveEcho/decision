@@ -108,24 +108,30 @@ def link(path, label):
     return f'[[{path.removesuffix(".md")}|{title(label)}]]'
 
 
-def entry_path(entry_id):
-    return f'知识/{identifier(entry_id)}.md'
+def filename(value):
+    value = re.sub(r'[\x00-\x1f/\\:*?"<>|\[\]#^]', ' ', str(value))
+    value = re.sub(r'\s+', ' ', value).strip(' .') or '未命名'
+    return value.encode('utf-8')[:200].decode('utf-8', errors='ignore')
+
+
+def entry_path(entry_id, heading):
+    return f'知识/{identifier(entry_id)}/{filename(heading)}.md'
 
 
 def domain_path(domain):
-    return f'领域/{digest(str(domain).encode())[:24]}.md'
+    return f'领域/{digest(str(domain).encode())[:24]}/{filename(domain)}.md'
 
 
-def reference_path(kind, record_id):
+def reference_path(kind, record_id, heading):
     if kind not in ('message', 'source'):
         raise SyncError('导出包含不支持的出处类型。')
-    return f'出处/{kind}-{identifier(record_id)}.md'
+    return f'出处/{kind}-{identifier(record_id)}/{filename(heading)}.md'
 
 
-def history_path(entry_id, revision):
+def history_path(entry_id, revision, heading):
     if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
         raise SyncError('导出包含无效历史版本。')
-    return f'历史/{identifier(entry_id)}-v{revision}.md'
+    return f'历史/{identifier(entry_id)}/v{revision} · {filename(heading)}.md'
 
 
 def render(snapshot):
@@ -139,6 +145,12 @@ def render(snapshot):
     files = {}
     domains = {}
     histories = {}
+    reference_items = {(ref['kind'], identifier(ref['id'])): ref for ref in snapshot.get('references', [])}
+    reference_labels = {}
+    for key, ref in reference_items.items():
+        label = {'assistant': 'AI讨论', 'user': '本人原话'}.get(ref.get('role'), '资料')
+        excerpt = ref.get('quote') or ref.get('title') or '出处记录'
+        reference_labels[key] = label + ' · ' + re.sub(r'\s+', ' ', str(excerpt))[:40]
     for group in snapshot.get('histories', []):
         entry_id = identifier(group['entryId'])
         if entry_id not in by_id:
@@ -149,7 +161,7 @@ def render(snapshot):
     def note(item, historical=False):
         item_id = identifier(item['id'])
         revision = item['revision']
-        history_path(item_id, revision)
+        history_path(item_id, revision, item.get('title', '知识'))
         labels = item.get('domains', [])
         if not isinstance(labels, list) or any(not isinstance(d, str) for d in labels):
             raise SyncError('领域格式无效。')
@@ -175,7 +187,7 @@ def render(snapshot):
             text += '## 相关知识\n\n'
             for other in related:
                 if other in by_id and other != item_id:
-                    text += f'- {link(entry_path(other), by_id[other]["title"])}\n'
+                    text += f'- {link(entry_path(other, by_id[other]["title"]), by_id[other]["title"])}\n'
             text += '\n'
         if item.get('refs'):
             text += '## 出处与讨论记录\n\n'
@@ -183,31 +195,30 @@ def render(snapshot):
                 key = (ref['kind'], identifier(ref['id']))
                 referenced.add(key)
                 role = {'assistant': 'AI 原话（非事实证明）', 'user': '本人原话'}.get(ref.get('role'), '正式资料')
-                text += f'- {link(reference_path(*key), role)}\n'
+                text += f'- {link(reference_path(*key, reference_labels.get(key, "出处记录")), role)}\n'
                 text += '\n'.join('  > ' + line for line in body(ref.get('quote', '')).splitlines()) + '\n\n'
         if historical:
-            text += f'## 当前版本\n\n{link(entry_path(item_id), "查看当前知识")}\n'
+            text += f'## 当前版本\n\n{link(entry_path(item_id, by_id[item_id]["title"]), "查看当前知识")}\n'
         elif histories.get(item_id):
             text += '## 修改历史\n\n'
             for old in sorted(histories[item_id], key=lambda v: v['revision'], reverse=True):
-                text += f'- {link(history_path(item_id, old["revision"]), "版本 " + str(old["revision"]))}\n'
+                text += f'- {link(history_path(item_id, old["revision"], old["title"]), "版本 " + str(old["revision"]))}\n'
         return text
 
     for item_id, item in by_id.items():
-        files[entry_path(item_id)] = note(item).encode()
+        files[entry_path(item_id, item['title'])] = note(item).encode()
         for domain in item.get('domains', []):
             domains.setdefault(domain, []).append(item)
         for old in histories.get(item_id, []):
             if identifier(old['id']) != item_id:
                 raise SyncError('历史ID不匹配。')
-            files[history_path(item_id, old['revision'])] = note(old, True).encode()
+            files[history_path(item_id, old['revision'], old['title'])] = note(old, True).encode()
     for domain, members in sorted(domains.items()):
         text = f'# {title(domain)}\n\nAI 根据已确认内容整理的领域；分类不代表内容已被证实。\n\n'
         text += f'{link("知识总览.md", "返回知识总览")} · {len(members)} 条知识\n\n'
         for item in sorted(members, key=lambda v: v['title']):
-            text += f'- {link(entry_path(item["id"]), item["title"])}\n'
+            text += f'- {link(entry_path(item["id"], item["title"]), item["title"])}\n'
         files[domain_path(domain)] = text.encode()
-    reference_items = {(ref['kind'], identifier(ref['id'])): ref for ref in snapshot.get('references', [])}
     for key in referenced:
         ref = reference_items.get(key, {})
         text = f'# {title(ref.get("title", "出处记录"))}\n\n'
@@ -223,7 +234,7 @@ def render(snapshot):
         origin = ref.get('originUrl')
         if origin and urllib.parse.urlsplit(origin).scheme in ('https', 'http'):
             text += '\n原始网址：' + str(origin).replace('\n', '').replace('\r', '') + '\n'
-        files[reference_path(*key)] = text.encode()
+        files[reference_path(*key, reference_labels.get(key, '出处记录'))] = text.encode()
     dashboard = '# 我的知识库\n\n'
     dashboard += f'已确认知识 **{len(entries)}** 条，领域 **{len(domains)}** 个。\n\n'
     dashboard += '这里展示与 AI 讨论后由本人确认的成果。继续聊天后，可新增、合并或修订；旧版本保留。\n\n'
@@ -234,7 +245,7 @@ def render(snapshot):
         dashboard += f'- {link(domain_path(domain), domain)} · {len(members)} 条\n'
     dashboard += '\n## 最近更新\n\n'
     for item in sorted(entries, key=lambda v: v.get('updatedAt', ''), reverse=True)[:20]:
-        dashboard += f'- {link(entry_path(item["id"]), item["title"])} · 版本 {item["revision"]}\n'
+        dashboard += f'- {link(entry_path(item["id"], item["title"]), item["title"])} · 版本 {item["revision"]}\n'
     dashboard += '\n## 看关系图\n\n打开 Obsidian 的“关系图谱”：领域连接知识，知识连接出处和相关知识。'
     dashboard += '可在图谱设置中按 `tag:领域/领域名` 分组着色；局部图谱更适合看一条知识的上下文。\n'
     files['知识总览.md'] = dashboard.encode()
@@ -245,8 +256,11 @@ def managed_name(value):
     if value == '知识总览.md':
         return True
     uid = r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}'
-    return bool(re.fullmatch(rf'(?:知识/{uid}|历史/{uid}-v[1-9][0-9]*|'
-                             rf'出处/(?:message|source)-{uid}|领域/[0-9a-f]{{24}})\.md', value))
+    if Path(value).is_absolute() or '..' in Path(value).parts or '\\' in value:
+        return False
+    legacy = rf'(?:知识/{uid}|历史/{uid}-v[1-9][0-9]*|出处/(?:message|source)-{uid}|领域/[0-9a-f]{{24}})\.md'
+    readable = rf'(?:知识/{uid}/[^/]+|历史/{uid}/v[1-9][0-9]* · [^/]+|出处/(?:message|source)-{uid}/[^/]+|领域/[0-9a-f]{{24}}/[^/]+)\.md'
+    return bool(re.fullmatch(legacy, value) or re.fullmatch(readable, value))
 
 
 def sync_snapshot(snapshot, vault):
