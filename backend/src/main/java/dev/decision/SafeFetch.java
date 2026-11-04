@@ -62,6 +62,7 @@ final class SafeFetch {
 
   static Page fetch(String raw) {
     URI uri = validateUri(raw);
+    long deadline = System.nanoTime() + java.time.Duration.ofSeconds(25).toNanos();
     DnsResolver resolver =
         new DnsResolver() {
           public InetAddress[] resolve(String h) throws UnknownHostException {
@@ -105,7 +106,17 @@ final class SafeFetch {
                   byte[] bytes = new byte[0];
                   if (code == 200 && response.getEntity() != null) {
                     try (InputStream in = response.getEntity().getContent()) {
-                      bytes = in.readNBytes(1_048_577);
+                      java.io.ByteArrayOutputStream collected = new java.io.ByteArrayOutputStream();
+                      byte[] chunk = new byte[8192];
+                      int count;
+                      while ((count = in.read(chunk)) != -1) {
+                        if (System.nanoTime() > deadline)
+                          throw new ApiError(502, "FETCH_TIMEOUT", "网页读取超时，请粘贴正文", true);
+                        collected.write(chunk, 0, count);
+                        if (collected.size() > 1_048_576)
+                          throw new ApiError(400, "SOURCE_TOO_LARGE", "网页正文超过限制，请粘贴摘录");
+                      }
+                      bytes = collected.toByteArray();
                     }
                   }
                   return new Result(code, location, type, bytes);

@@ -52,6 +52,8 @@ class BackendTest {
     s.db.update("UPDATE context_version SET revision=0");
     c.mock = false;
     c.modelKey = "";
+    c.modelBase = "https://api.deepseek.com";
+    c.wikiPublicUrl = "";
     c.wikiBase = "";
     c.wikiToken = "";
     owner = auth.token("owner", Instant.now().plusSeconds(600));
@@ -98,6 +100,389 @@ class BackendTest {
 
   JsonNode device() throws Exception {
     return postJson("/devices", owner, Json.obj("name", "synthetic-device"), 201);
+  }
+
+  com.sun.net.httpserver.HttpServer modelServer(
+      java.util.function.Function<JsonNode, ObjectNode> answer) throws Exception {
+    var server =
+        com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext(
+        "/chat/completions",
+        exchange -> {
+          JsonNode request =
+              Json.parse(
+                  new String(
+                      exchange.getRequestBody().readAllBytes(),
+                      java.nio.charset.StandardCharsets.UTF_8));
+          ObjectNode response = answer.apply(request);
+          byte[] out =
+              Json.obj(
+                      "model",
+                      "synthetic-http-fixture",
+                      "usage",
+                      Json.obj("prompt_tokens", 10, "completion_tokens", 20),
+                      "choices",
+                      Json.arr().add(Json.obj("message", Json.obj("content", response.toString()))))
+                  .toString()
+                  .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+          exchange.getResponseHeaders().set("Content-Type", "application/json");
+          exchange.sendResponseHeaders(200, out.length);
+          exchange.getResponseBody().write(out);
+          exchange.close();
+        });
+    server.start();
+    c.modelBase = "http://127.0.0.1:" + server.getAddress().getPort();
+    c.modelKey = "synthetic-fixture-key";
+    return server;
+  }
+
+  ObjectNode syntheticSummary(JsonNode request) {
+    JsonNode input = Json.parse(request.path("messages").get(1).path("content").asText());
+    var citations = Json.arr();
+    for (JsonNode src : input.path("untrustedSources"))
+      citations.add(
+          Json.obj("sourceId", src.path("id"), "quote", src.path("text"), "relation", "context"));
+    return Json.obj(
+        "topic",
+        Json.obj(
+            "title",
+            "合成主题",
+            "viewpoints",
+            Json.arr().add("仅为测试观点"),
+            "conditions",
+            Json.arr().add("仅适用合成条件"),
+            "uncertainties",
+            Json.arr().add("合成未知"),
+            "evidence",
+            citations),
+        "discussions",
+        Json.arr(),
+        "memories",
+        Json.arr());
+  }
+
+  @Test
+  void summariesMergeSourcesAndKeepRevisionHistory() throws Exception {
+    var server = modelServer(this::syntheticSummary);
+    try {
+      String p = problem(), first = source(p);
+      assertTrue(worker.runOne());
+      ObjectNode before = s.all("topic", p).get(0);
+      assertTrue(before.path("markdown").asText().contains("## 适用条件"));
+      assertEquals(1, before.path("evidence").size());
+      JsonNode queued =
+          postJson(
+              "/sources",
+              owner,
+              Json.obj("problemId", p, "kind", "article", "text", "第二份合成资料，用于关联主题"),
+              202);
+      worker.runOne();
+      worker.runOne();
+      assertEquals("succeeded", job(queued.path("id").asText()).path("status").asText());
+      List<ObjectNode> topics = s.all("topic", p);
+      assertEquals(1, topics.size());
+      assertEquals(before.path("id"), topics.get(0).path("id"));
+      assertEquals(2, topics.get(0).path("evidence").size());
+      assertTrue(topics.get(0).path("revision").asInt() > before.path("revision").asInt());
+      assertTrue(
+          s.db.queryForObject(
+                  "SELECT count(*) FROM record_history WHERE record_id=?::uuid",
+                  Integer.class,
+                  before.path("id").asText())
+              >= 2);
+      assertTrue(s.all("discussion", p).isEmpty());
+      assertEquals(2, s.db.queryForObject("SELECT count(*) FROM model_calls", Integer.class));
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void summaryFailurePreservesSourceAndExplainsPendingSummary() throws Exception {
+    String p = problem(), id = source(p);
+    worker.runOne();
+    assertNotNull(s.get("source", id));
+    assertTrue(
+        s.all("topic", p)
+            .get(0)
+            .path("markdown")
+            .asText()
+            .contains("摘要生成未完成（MODEL_NOT_CONFIGURED）"));
+  }
+
+  @Test
+  void invalidSummaryEvidenceNeverBecomesVerifiedTopic() throws Exception {
+    var server =
+        modelServer(
+            request -> {
+              ObjectNode result = syntheticSummary(request);
+              ((ObjectNode) result.path("topic").path("evidence").get(0)).put("quote", "伪造引文");
+              return result;
+            });
+    try {
+      String p = problem();
+      source(p);
+      worker.runOne();
+      ObjectNode topic = s.all("topic", p).get(0);
+      assertTrue(topic.path("evidence").isEmpty());
+      assertTrue(topic.path("markdown").asText().contains("SUMMARY_UNGROUNDED"));
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void contextCorrectionDuringModelCallRejectsStaleAnswer() throws Exception {
+    String p = problem();
+    var server =
+        modelServer(
+            request -> {
+              s.write(
+                  () -> {
+                    s.bump();
+                    return null;
+                  });
+              return Json.obj(
+                  "content", "旧上下文输出", "evidence", Json.arr(), "uncertainties", Json.arr());
+            });
+    try {
+      JsonNode j =
+          postJson("/problems/" + p + "/messages", owner, Json.obj("content", "合成上下文修改测试"), 202);
+      worker.runOne();
+      assertEquals(
+          "CONTEXT_CHANGED", job(j.path("id").asText()).path("error").path("code").asText());
+      assertEquals(1, s.all("message", p).size());
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void wikiAdapterUsesHttp11AndVerifiesReadback() throws Exception {
+    java.util.concurrent.atomic.AtomicReference<String> stored =
+        new java.util.concurrent.atomic.AtomicReference<>();
+    java.util.concurrent.atomic.AtomicInteger creates =
+        new java.util.concurrent.atomic.AtomicInteger();
+    var server =
+        com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+    String path = "decision/" + Json.id();
+    server.createContext(
+        "/graphql",
+        exchange -> {
+          JsonNode input =
+              Json.parse(
+                  new String(
+                      exchange.getRequestBody().readAllBytes(),
+                      java.nio.charset.StandardCharsets.UTF_8));
+          String query = input.path("query").asText();
+          JsonNode response;
+          if (exchange.getRequestHeaders().containsKey("Upgrade")) {
+            exchange.sendResponseHeaders(400, -1);
+            exchange.close();
+            return;
+          }
+          if (query.contains("list("))
+            response =
+                Json.obj(
+                    "data",
+                    Json.obj(
+                        "pages",
+                        Json.obj(
+                            "list",
+                            stored.get() == null
+                                ? Json.arr()
+                                : Json.arr().add(Json.obj("id", 7, "path", path)))));
+          else if (query.contains("single("))
+            response =
+                Json.obj(
+                    "data",
+                    Json.obj(
+                        "pages",
+                        Json.obj(
+                            "single", Json.obj("id", 7, "path", path, "content", stored.get()))));
+          else {
+            stored.set(input.path("variables").path("content").asText());
+            String operation = query.contains("create(") ? "create" : "update";
+            if (operation.equals("create")) creates.incrementAndGet();
+            response =
+                Json.obj(
+                    "data",
+                    Json.obj(
+                        "pages",
+                        Json.obj(
+                            operation,
+                            Json.obj(
+                                "responseResult",
+                                Json.obj("succeeded", true),
+                                "page",
+                                Json.obj("id", 7, "path", path)))));
+          }
+          byte[] out = response.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+          exchange.getResponseHeaders().set("Content-Type", "application/json");
+          exchange.sendResponseHeaders(200, out.length);
+          exchange.getResponseBody().write(out);
+          exchange.close();
+        });
+    server.start();
+    try {
+      c.wikiBase = "http://127.0.0.1:" + server.getAddress().getPort();
+      c.wikiToken = "synthetic-wiki-token";
+      c.wikiPublicUrl = "http://127.0.0.1:8090";
+      c.wikiLocale = "en";
+      ObjectNode topic = Json.obj("id", path.substring(9), "title", "合成测试", "markdown", "合成摘要");
+      Wiki.Result first = wiki.sync(topic);
+      assertEquals("7", first.pageId());
+      assertTrue(first.url().startsWith("http://127.0.0.1:8090/en/"));
+      topic.put("markdown", "更新后的合成摘要");
+      wiki.sync(topic);
+      assertEquals(1, creates.get());
+      assertEquals("更新后的合成摘要", stored.get());
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void upstreamDeadlineCoversStalledBodyAndResponseSize() throws Exception {
+    var server =
+        com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext(
+        "/slow",
+        exchange -> {
+          exchange.sendResponseHeaders(200, 0);
+          exchange.getResponseBody().write('{');
+          exchange.getResponseBody().flush();
+          try {
+            Thread.sleep(400);
+          } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+          }
+          exchange.close();
+        });
+    server.createContext(
+        "/large",
+        exchange -> {
+          byte[] bytes = new byte[1_048_577];
+          exchange.sendResponseHeaders(200, bytes.length);
+          try {
+            exchange.getResponseBody().write(bytes);
+          } finally {
+            exchange.close();
+          }
+        });
+    server.start();
+    try {
+      String base = "http://127.0.0.1:" + server.getAddress().getPort();
+      ApiError timeout =
+          assertThrows(
+              ApiError.class,
+              () ->
+                  Upstream.post(
+                      base + "/slow", "fixture", Json.obj(), java.time.Duration.ofMillis(150)));
+      assertEquals("UPSTREAM_TIMEOUT", timeout.code);
+      ApiError large =
+          assertThrows(
+              ApiError.class,
+              () ->
+                  Upstream.post(
+                      base + "/large", "fixture", Json.obj(), java.time.Duration.ofSeconds(3)));
+      assertEquals("UPSTREAM_TOO_LARGE", large.code);
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void ownerCanCorrectRetractedMemoryAndExplicitlyReactivateIt() throws Exception {
+    String p = problem();
+    JsonNode m =
+        postJson(
+            "/memories",
+            owner,
+            Json.obj("problemId", p, "kind", "user_reported", "content", "撤销前的合成资料"),
+            201);
+    String id = m.path("id").asText();
+    req(
+        patch("/api/v1/memories/" + id),
+        owner,
+        Json.obj("status", "retracted", "expectedRevision", 1),
+        200);
+    req(
+        patch("/api/v1/memories/" + id),
+        owner,
+        Json.obj("content", "撤销后修正", "expectedRevision", 2),
+        200);
+    assertTrue(s.all("source", p).isEmpty());
+    JsonNode restored =
+        req(
+            patch("/api/v1/memories/" + id),
+            owner,
+            Json.obj("status", "active", "expectedRevision", 3),
+            200);
+    assertEquals(
+        "撤销后修正",
+        s.get("source", restored.path("evidence").get(0).path("sourceId").asText())
+            .path("text")
+            .asText());
+  }
+
+  @Test
+  void snoozeRearmsPreviouslySentNotification() throws Exception {
+    String p = problem();
+    JsonNode dev = device();
+    String id = dev.path("device").path("id").asText();
+    ObjectNode disc =
+        s.write(
+            () ->
+                s.create(
+                    "discussion",
+                    p,
+                    Json.obj(
+                        "problemId",
+                        p,
+                        "title",
+                        "虚构议题",
+                        "reason",
+                        "测试",
+                        "evidence",
+                        Json.arr(),
+                        "status",
+                        "unread",
+                        "snoozeUntil",
+                        null)));
+    ObjectNode delivery =
+        s.write(
+            () ->
+                s.create(
+                    "delivery",
+                    p,
+                    Json.obj(
+                        "discussionId",
+                        disc.path("id"),
+                        "deviceId",
+                        id,
+                        "channel",
+                        "desktop",
+                        "status",
+                        "sent",
+                        "error",
+                        null)));
+    req(
+        patch("/api/v1/discussions/" + disc.path("id").asText()),
+        owner,
+        Json.obj("status", "snoozed", "snoozeUntil", Instant.now().plusSeconds(120).toString()),
+        200);
+    assertEquals(
+        "pending", s.get("delivery", delivery.path("id").asText()).path("status").asText());
+    assertTrue(d.deliveries(id, "device:" + id).isEmpty());
+    s.write(
+        () -> {
+          ObjectNode delayed = s.get("discussion", disc.path("id").asText());
+          delayed.put("snoozeUntil", Instant.now().minusSeconds(1).toString());
+          s.save("discussion", delayed);
+          return null;
+        });
+    assertEquals(1, d.deliveries(id, "device:" + id).size());
   }
 
   @Test
