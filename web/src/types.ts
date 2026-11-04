@@ -95,6 +95,7 @@ export interface Topic {
   syncStatus: string;
   wikiUrl: string | null;
   evidence: Evidence[];
+  updatedAt?: string;
 }
 export interface Discussion {
   id: string;

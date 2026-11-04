@@ -16,7 +16,7 @@ import AttachmentList from "./AttachmentList.vue";
 import ChatRecords from "./ChatRecords.vue";
 import MemoryPage from "./MemoryPage.vue";
 import KnowledgeConversation from "./KnowledgeConversation.vue";
-import KnowledgeLibrary from "./KnowledgeLibrary.vue";
+import LibraryPage from "./LibraryPage.vue";
 import { readKnowledgeOperations } from "./knowledgeStorage";
 import { useMemoryOverview } from "./memoryOverview";
 import {
@@ -396,12 +396,9 @@ async function load() {
     return;
   }
   if (section === "资料与主题") {
-    const q = knowledgeProblemId.value
-      ? `?problemId=${encodeURIComponent(knowledgeProblemId.value)}`
-      : "";
     const [s, t] = await Promise.all([
-      list<Source>("/sources" + q),
-      list<Topic>("/topics" + q),
+      list<Source>("/sources"),
+      list<Topic>("/topics"),
     ]);
     assign(sources, s);
     assign(topics, t);
@@ -645,7 +642,11 @@ onUnmounted(() => {
       @pointerdown="scrollInteraction++"
       @keydown="scrollInteraction++"
       :inert="sidebarModal"
-      :class="{ 'chat-page': tab === '讨论', 'empty-chat': emptyConversation }"
+      :class="{
+        'chat-page': tab === '讨论',
+        'empty-chat': emptyConversation,
+        'library-page': tab === '资料与主题',
+      }"
     >
       <header class="page-header">
         <button
@@ -987,108 +988,24 @@ onUnmounted(() => {
             <p class="composer-footnote">建议供你判断，决定由你确认。</p>
           </div>
         </template>
-        <template v-else-if="tab === '资料与主题'">
-          <KnowledgeLibrary
-            :disabled="busy || !!pendingChat"
-            @source="showSource"
-            @conversation="openSourceConversation"
-          />
-          <p v-if="!knowledgeProblemId" class="muted">
-            全部资料 · 来自各个对话
-          </p>
-          <p v-else class="muted">当前对话：{{ problem?.title }}</p>
-          <form v-if="knowledgeProblemId" class="card" @submit.prevent="ingest">
-            <h2>添加资料</h2>
-            <label>标题（可选）<input v-model="sourceTitle" /></label
-            ><label
-              >文章链接<input
-                v-model="sourceUrl"
-                type="url"
-                placeholder="https://…" /></label
-            ><label
-              >或粘贴正文<textarea
-                v-model="sourceText"
-                placeholder="链接无法读取时，可以粘贴正文；同时提供时优先保存正文。"
-              /></label
-            ><button
-              :disabled="busy || (!sourceText.trim() && !sourceUrl.trim())"
-            >
-              保存并整理资料
-            </button>
-          </form>
-          <h2>来源 · {{ sources.length }}</h2>
-          <p v-if="!sources.length" class="muted">还没有资料。</p>
-          <article v-for="s in sources" :key="s.id" class="card">
-            <h3>{{ s.title }}</h3>
-            <p>{{ label(s.status) }} · {{ date(s.capturedAt) }}</p>
-            <button
-              v-if="!knowledgeProblemId && s.problemId"
-              class="secondary"
-              :disabled="busy || !!pendingChat"
-              @click="openSourceConversation(s.problemId)"
-            >
-              打开原对话
-            </button>
-            <button
-              class="secondary"
-              :disabled="busy"
-              @click="showSource(s.id)"
-            >
-              查看原文
-            </button>
-            <button
-              v-if="knowledgeProblemId"
-              class="danger"
-              :disabled="busy"
-              @click="remove(`/sources/${s.id}`)"
-            >
-              删除
-            </button>
-          </article>
-          <h2>知识主题</h2>
-          <div v-if="knowledgeProblemId && sources.length" class="card">
-            <p>
-              摘要未完成或资料、记忆有变化时，可重新分析已有资料，无需重复上传。Wiki
-              同步仅负责把已有主题写入 Wiki。
-            </p>
-            <button :disabled="busy" @click="reanalyze">重新分析资料</button>
-          </div>
-          <p v-if="!topics.length" class="muted">暂无主题，等待资料处理。</p>
-          <article v-for="t in topics" :key="t.id" class="card">
-            <h3>{{ t.title }}</h3>
-            <button
-              v-if="!knowledgeProblemId && t.problemId"
-              class="secondary"
-              :disabled="busy || !!pendingChat"
-              @click="openSourceConversation(t.problemId)"
-            >
-              打开原对话
-            </button>
-            <p class="pre">{{ t.markdown }}</p>
-            <p>Wiki：{{ label(t.syncStatus) }}</p>
-            <a
-              v-if="safeUrl(t.wikiUrl)"
-              :href="safeUrl(t.wikiUrl)"
-              target="_blank"
-              rel="noopener noreferrer"
-              >查看 Wiki</a
-            >
-            <button
-              v-if="knowledgeProblemId"
-              class="secondary"
-              :disabled="busy"
-              @click="act(() => job(`/topics/${t.id}/sync`, {}))"
-            >
-              同步 Wiki
-            </button>
-            <EvidencePanel
-              :evidence="t.evidence"
-              :sources="sources"
-              :busy="busy"
-              @open="showSource"
-            />
-          </article>
-        </template>
+        <LibraryPage
+          v-else-if="tab === '资料与主题'"
+          :sources="sources"
+          :topics="topics"
+          :problems="problems"
+          :context-id="knowledgeProblemId"
+          :busy="busy"
+          :can-navigate="!busy && !pendingChat"
+          v-model:title="sourceTitle"
+          v-model:text="sourceText"
+          v-model:url="sourceUrl"
+          @source="showSource"
+          @conversation="openSourceConversation"
+          @remove="(id) => remove(`/sources/${id}`)"
+          @reanalyze="reanalyze"
+          @sync="(id) => act(() => job(`/topics/${id}/sync`, {}))"
+          @ingest="ingest"
+        />
         <MemoryPage
           v-else-if="tab === '记忆'"
           :memories="memories"
