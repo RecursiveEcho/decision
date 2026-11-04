@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate the checked-in, dependency-free OpenAPI 3.0 description of CONTRACT v1."""
 import json
+import sys
 from pathlib import Path
 
 def string(nullable=False, **kw): return dict(type='string', **({'nullable':True} if nullable else {}), **kw)
@@ -22,7 +23,7 @@ ev=arr(ref('Evidence')); mode=enum('real','mock')
 entity('Problem',{'title':string(),'goal':string(),'constraints':arr(),'unknowns':arr()})
 entity('Source',{'problemId':uuid,'kind':enum('article','observation','user_statement'),'title':string(),'text':string(),'originUrl':string(True),'author':string(True),'capturedAt':time,'status':enum('ready','partial','failed'),'extractionMethod':enum('user_input','http','ocr','accessibility'),'locator':{'type':'object'}},updated=False)
 entity('Message',{'problemId':uuid,'role':enum('user','assistant'),'content':string(),'evidence':ev,'uncertainties':arr(),'mode':mode},updated=False)
-entity('Job',{'kind':enum('chat','source_ingest','topic_sync','analysis'),'status':enum('queued','running','succeeded','failed'),'result':{'type':'object','nullable':True,'description':'chat: userMessageId,assistantMessageId; source_ingest: sourceId,topicIds; topic_sync: topicId,wikiUrl; analysis: discussionIds'},'error':{'allOf':[ref('Error')],'nullable':True},'mode':mode})
+entity('Job',{'kind':enum('chat','source_ingest','topic_sync','analysis','memory_overview','knowledge_proposal'),'status':enum('queued','running','succeeded','failed'),'result':{'type':'object','nullable':True,'description':'chat: userMessageId,assistantMessageId; source_ingest: sourceId,topicIds; topic_sync: topicId,wikiUrl; analysis: discussionIds; knowledge_proposal: proposalId'},'error':{'allOf':[ref('Error')],'nullable':True},'mode':mode})
 entity('Memory',{'problemId':uuid,'content':string(),'kind':enum('user_reported','observed','inferred'),'evidence':ev,'status':enum('active','retracted'),'revision':{'type':'integer'}})
 entity('Topic',{'problemId':uuid,'title':string(),'markdown':string(),'evidence':ev,'revision':{'type':'integer'},'wikiPageId':string(True),'wikiUrl':string(True),'syncStatus':enum('pending_configuration','pending','synced','failed')},created=False)
 entity('Discussion',{'problemId':uuid,'title':string(),'reason':string(),'evidence':ev,'status':enum('unread','read','snoozed','dismissed'),'snoozeUntil':nullable_time})
@@ -32,6 +33,12 @@ entity('Device',{'name':string(),'desiredState':enum('paused','running'),'report
 entity('Delivery',{'discussionId':uuid,'deviceId':uuid,'channel':enum('desktop'),'status':enum('pending','sent','failed','user_confirmed'),'error':string(True)},created=False)
 schemas['Status']=obj({'model':obj({'configured':{'type':'boolean'},'lastCallStatus':string()}),'wiki':obj({'configured':{'type':'boolean'},'status':string()}),'observer':obj({'lastSeenAt':nullable_time}),'usage':obj({'requests':{'type':'integer'},'inputTokens':{'type':'integer'},'outputTokens':{'type':'integer'},'costEstimate':{'type':'number','nullable':True},'currency':string(True)})})
 paths={}
+
+schemas['KnowledgeRef']=obj({'kind':enum('message','source'),'id':uuid,'quote':string(maxLength=500),'role':enum('user','assistant')},['kind','id','quote'])
+schemas['KnowledgeCoverage']=obj({'messagesTotal':{'type':'integer'},'messagesConsidered':{'type':'integer'},'sourcesTotal':{'type':'integer'},'sourcesConsidered':{'type':'integer'},'knowledgeTotal':{'type':'integer'},'knowledgeConsidered':{'type':'integer'},'truncated':{'type':'boolean'},'attachmentsIncluded':{'type':'boolean','enum':[False]},'notice':string()})
+knowledge_fields={'problemId':uuid,'title':string(maxLength=160),'markdown':string(maxLength=16000),'domains':{**arr(string(maxLength=40)),'maxItems':4},'relatedEntryIds':{**arr(uuid),'maxItems':8},'refs':arr(ref('KnowledgeRef'))}
+entity('KnowledgeEntry',{**knowledge_fields,'revision':{'type':'integer'},'proposalId':uuid,'coverage':ref('KnowledgeCoverage')})
+entity('KnowledgeProposal',{**knowledge_fields,'status':enum('pending','accepted','dismissed'),'action':enum('create','merge','revise','skip'),'reason':string(maxLength=2000),'targetEntryId':string(True,format='uuid'),'targetRevision':{'type':'integer','nullable':True},'contextFingerprint':string(),'coverage':ref('KnowledgeCoverage')})
 
 def route(method,path,response,code=200,body=None,required=None,query=(),public=False):
     operation={'operationId':method+'_'+path.strip('/').replace('/','_').replace('{','').replace('}',''),'responses':{str(code):{'description':'Success'}}}
@@ -63,6 +70,15 @@ route('post','/memories',ref('Memory'),201,{'problemId':uuid,'content':string(),
 route('patch','/memories/{id}',ref('Memory'),body={'content':string(),'status':enum('active','retracted'),'expectedRevision':{'type':'integer'}},required=['expectedRevision'])
 route('delete','/memories/{id}',None,204)
 route('post','/topics/{id}/sync',ref('Job'),202,{})
+route('post','/problems/{id}/knowledge-proposals',ref('Job'),202,{})
+route('get','/knowledge-proposals',obj({'items':arr(ref('KnowledgeProposal')),'nextCursor':string(True)}),query=['problemId','cursor','limit'])
+route('get','/knowledge-proposals/{id}',ref('KnowledgeProposal'))
+route('post','/knowledge-proposals/{id}/accept',obj({'proposalId':uuid,'entryId':uuid,'status':enum('accepted'),'action':enum('create','merge','revise')}),body={'expectedTargetRevision':{'type':'integer','nullable':True}})
+route('post','/knowledge-proposals/{id}/dismiss',obj({'proposalId':uuid,'status':enum('dismissed')}),body={})
+route('get','/knowledge-entries',obj({'items':arr(ref('KnowledgeEntry')),'nextCursor':string(True)}),query=['cursor','limit'])
+route('get','/knowledge-entries/{id}',ref('KnowledgeEntry'))
+route('get','/knowledge-entries/{id}/history',obj({'items':arr(ref('KnowledgeEntry')),'nextCursor':string(True)}))
+route('get','/knowledge-export',obj({'version':{'type':'integer','enum':[1]},'generatedAt':time,'entries':arr(ref('KnowledgeEntry')),'histories':arr(obj({'entryId':uuid,'versions':arr(ref('KnowledgeEntry'))})),'references':arr(obj({'kind':enum('message','source'),'id':uuid,'title':string(),'problemId':string(True,format='uuid'),'quote':string(),'role':enum('user','assistant'),'originUrl':string(True)},['kind','id','title','problemId','quote'])),'domains':arr()}))
 route('patch','/discussions/{id}',ref('Discussion'),body={'status':enum('unread','read','snoozed','dismissed'),'snoozeUntil':nullable_time},required=['status'])
 route('post','/decisions',ref('Decision'),201,{'problemId':uuid,'choice':string(),'rationale':string(),'expectedOutcome':string(),'evidence':ev,'reviewAt':nullable_time},['problemId','choice','rationale','expectedOutcome'])
 route('post','/decisions/{id}/reviews',ref('Review'),201,{'outcome':string(),'reflection':string(),'evidence':ev},['outcome','reflection'])
@@ -77,4 +93,13 @@ for resource,name in [('problems','Problem'),('sources','Source'),('memories','M
     query=['cursor','limit']+([] if resource in ['problems','devices'] else ['problemId'])+(['status'] if resource=='discussions' else [])
     route('get','/'+resource,obj({'items':arr(ref(name)),'nextCursor':string(True)}),query=query)
 spec={'openapi':'3.0.3','info':{'title':'Decision MVP API','version':'1.0.0','description':'Single-owner CONTRACT v1. No registration. Device tokens are restricted to heartbeat, observation upload, own deliveries/acks and owned jobs. Mock mode is explicit and disabled by default.'},'servers':[{'url':'/api/v1'}],'security':[{'bearerAuth':[]}],'paths':paths,'components':{'securitySchemes':{'bearerAuth':{'type':'http','scheme':'bearer'}},'schemas':schemas}}
+if '--knowledge-only' in sys.argv:
+    # Later modules already augmented the checked-in description; keep their schemas/routes.
+    current=json.loads(Path(__file__).resolve().parents[1].joinpath('openapi.json').read_text())
+    current['components']['schemas'].update({name:value for name,value in schemas.items() if name.startswith('Knowledge')})
+    current['paths'].update({path:value for path,value in paths.items() if 'knowledge' in path})
+    job=current['components']['schemas']['Job']['properties']
+    if 'knowledge_proposal' not in job['kind']['enum']: job['kind']['enum'].append('knowledge_proposal')
+    if 'knowledge_proposal: proposalId' not in job['result']['description']: job['result']['description']+='; knowledge_proposal: proposalId'
+    spec=current
 Path(__file__).resolve().parents[1].joinpath('openapi.json').write_text(json.dumps(spec,ensure_ascii=False,indent=2)+'\n')

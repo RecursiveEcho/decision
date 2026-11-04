@@ -128,6 +128,7 @@ class Store {
           case "ingest" -> "source_ingest";
           case "wiki" -> "topic_sync";
           case "memory_overview" -> "memory_overview";
+          case "knowledge_proposal" -> "knowledge_proposal";
           default -> "analysis";
         };
     ObjectNode j =
