@@ -54,3 +54,25 @@ Java 17、Spring Boot 3.5.16、PostgreSQL 16+、Flyway；运行接口见 [openap
 重试单个已知合成问题并真实回读Wiki：`python3 tools/live_smoke.py /path/to/ignored/.env http://127.0.0.1:8088 --reanalyze PROBLEM_UUID`。不会另起服务，不重复创建来源/消息/主题。
 
 官方依据：[JSON Output](https://api-docs.deepseek.com/guides/json_mode/)、[Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/)。
+
+
+## 对话附件与思考档位
+
+聊天创建/发送接受 `attachments:[{name,dataUrl}]` 和 `thinking:off|low|high|max`（默认off）；允许只有附件。每次最多4个、每个最多8MiB、总16MiB；聊天HTTP体24MiB，其余接口1MiB。PNG/JPEG检查真实格式、边长4096/1200万像素上限；文档支持PDF、DOCX、XLSX和UTF-8 TXT/MD/CSV。文件字节仅存在独立PG bytea表，消息/Job只含ID和元信息；幂等保存与原话/Job同事务，队列满整体回滚。
+
+解析在worker锁外的子Java进程，heap256MiB、直接内存32MiB、20秒超时强制结束、清环境、私有临时目录清理；这是资源隔离，不是OS文件系统/网络沙箱。依赖PDFBox3.0.8和POI6.0.0；禁止宏、嵌入对象、外部关系/实体，ZIP限2048项、单项8MiB、展开总32MiB及膨胀比，电子表格只读取公式缓存、不执行公式。子进程不接收模型密钥、文件名不作命令参数。
+
+单文档文本最多32000字符；PDF最多前20页文字、低文字/扫描页最多3页图像；DOCX正文/表格、XLSX最多20工作表和5000行。未读插图/页眉等、截断、扫描页范围写入coverage并以partial明确提示，不把文件保存成功当全文已读。加密/损坏文件可回读原件但chat失败，现有重试复用附件和思考档位；上下文失效/服务重启会结束pending/processing状态。owner认证GET `/attachments/{id}` 返回原件，device403，no-store/nosniff及安全下载名，禁止token进URL。
+
+模型收到真正的user `image_url`块，不把图像base64藏进文本JSON。附件均是不可信对话材料，不伪造Source引用；同问题同上下文最近12条消息的附件可供追问，当前附件优先且不能静默省略。历史超预算明确提示，文本总128000字符、图片最多16块、图像编码36MiB，总payload上限40MiB。
+
+| thinking | API thinking | reasoning_effort | max_tokens | 总超时 |
+|---|---|---|---:|---:|
+| off | disabled | 不传 | 4000 | 60秒 |
+| low | enabled | low | 8000 | 120秒 |
+| high | enabled | high | 16000 | 180秒 |
+| max | enabled | max | 32000 | 240秒 |
+
+思考响应体上限2MiB（off仍1MiB）；仅保存reasoning长度，不存/返回推理原文。档位和附件重试原样复用，超时/输出预算失败明确保留原话。
+
+官方依据：[DeepSeek图像](https://api-docs.deepseek.com/guides/vision/)、[思考档位](https://api-docs.deepseek.com/guides/thinking_mode/)、[PDFBox](https://pdfbox.apache.org/download.cgi)、[POI](https://poi.apache.org/download.cgi)。合成HTTP夹具只能验证请求格式，真实图片/文档理解与各档位体验由E统一记录，不能当作已实测。

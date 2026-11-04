@@ -872,6 +872,26 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "Attachment/body/parse limit error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Attachment/body/parse limit error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -903,7 +923,8 @@
                 "type": "object",
                 "properties": {
                   "content": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 12000
                   },
                   "sourceIds": {
                     "type": "array",
@@ -911,11 +932,20 @@
                       "type": "string",
                       "format": "uuid"
                     }
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "maxItems": 4,
+                    "items": {
+                      "$ref": "#/components/schemas/AttachmentUpload"
+                    }
+                  },
+                  "thinking": {
+                    "$ref": "#/components/schemas/Thinking"
                   }
                 },
-                "required": [
-                  "content"
-                ]
+                "required": [],
+                "description": "Nonblank content or at least one attachment is required. Atomic save; 24 MiB HTTP body limit. Retry retains original attachments and thinking choice."
               }
             }
           }
@@ -4487,6 +4517,26 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "Attachment/body/parse limit error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Attachment/body/parse limit error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -4510,13 +4560,21 @@
                 "properties": {
                   "content": {
                     "type": "string",
-                    "minLength": 1,
                     "maxLength": 12000
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "maxItems": 4,
+                    "items": {
+                      "$ref": "#/components/schemas/AttachmentUpload"
+                    }
+                  },
+                  "thinking": {
+                    "$ref": "#/components/schemas/Thinking"
                   }
                 },
-                "required": [
-                  "content"
-                ]
+                "required": [],
+                "description": "Nonblank content or at least one attachment is required. Atomic save; 24 MiB HTTP body limit. Retry retains original attachments and thinking choice."
               }
             }
           }
@@ -4652,6 +4710,45 @@
           }
         },
         "description": "Owner only. Failed chat jobs only (otherwise 409 JOB_NOT_RETRYABLE). Reuses the original user message. One persisted retry child per failed job across all keys; returns that child even if it has since failed. Retry that new failed child for another attempt. Before creating a child, withdrawn/deleted/obsolete original messages return 409 CONTEXT_CHANGED. No duplicate user message or automatic retry."
+      }
+    },
+    "/attachments/{id}": {
+      "get": {
+        "operationId": "get_attachment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "description": "Owner only; device denied. Original binary, nosniff, no-store and safe attachment Content-Disposition. Never put token in URL.",
+        "responses": {
+          "200": {
+            "description": "Original file bytes",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Device forbidden"
+          },
+          "404": {
+            "description": "Missing/deleted attachment"
+          }
+        }
       }
     }
   },
@@ -4887,6 +4984,15 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attachment"
+            }
+          },
+          "thinking": {
+            "$ref": "#/components/schemas/Thinking"
           }
         },
         "required": [
@@ -5415,6 +5521,117 @@
           "observer",
           "usage"
         ]
+      },
+      "Thinking": {
+        "type": "string",
+        "enum": [
+          "off",
+          "low",
+          "high",
+          "max"
+        ],
+        "default": "off"
+      },
+      "AttachmentUpload": {
+        "type": "object",
+        "required": [
+          "name",
+          "dataUrl"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 180
+          },
+          "dataUrl": {
+            "type": "string",
+            "description": "Base64 data URL only; PNG/JPEG, PDF/DOCX/XLSX, UTF-8 TXT/MD/CSV. 8 MiB decoded per file; total 16 MiB."
+          }
+        }
+      },
+      "Attachment": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "mimeType",
+          "size",
+          "kind",
+          "status",
+          "error",
+          "coverage"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "mimeType": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "image",
+              "document"
+            ]
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "processing",
+              "ready",
+              "partial",
+              "failed"
+            ]
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "nullable": true
+          },
+          "coverage": {
+            "type": "object",
+            "required": [
+              "truncated"
+            ],
+            "properties": {
+              "pages": {
+                "type": "integer"
+              },
+              "processedPages": {
+                "type": "integer"
+              },
+              "truncated": {
+                "type": "boolean"
+              },
+              "notice": {
+                "type": "string"
+              }
+            }
+          }
+        }
       }
     }
   }

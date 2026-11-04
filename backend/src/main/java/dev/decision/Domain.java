@@ -13,12 +13,14 @@ class Domain {
   final Config c;
   final Evidence evidence;
   final Auth auth;
+  final Attachments attachments;
 
-  Domain(Store s, Config c, Evidence e, Auth a) {
+  Domain(Store s, Config c, Evidence e, Auth a, Attachments attachments) {
     this.s = s;
     this.c = c;
     this.evidence = e;
     this.auth = a;
+    this.attachments = attachments;
   }
 
   ObjectNode problem(JsonNode b) {
@@ -97,7 +99,7 @@ class Domain {
   }
 
   ObjectNode conversation(JsonNode b) {
-    String content = Json.required(b, "content", 12000);
+    String content = Json.optional(b, "content", "", 12000);
     String title =
         content.strip().split("[\\r\\n。！？!?]", 2)[0].replaceAll("\\p{Cntrl}", " ").strip();
     if (title.isBlank()) title = "新对话";
@@ -111,7 +113,7 @@ class Domain {
                 "title", title, "goal", "", "constraints", Json.arr(), "unknowns", Json.arr()));
     String id = problem.path("id").asText();
     s.db.update("UPDATE records SET auto_title=true WHERE id=?::uuid", id);
-    ObjectNode job = chat(id, Json.obj("content", content), true);
+    ObjectNode job = chat(id, b, true);
     return Json.obj("problem", problem, "job", job);
   }
 
@@ -146,7 +148,11 @@ class Domain {
 
   ObjectNode chat(String id, JsonNode b, boolean autoTitle) {
     s.get("problem", id);
-    String content = Json.required(b, "content", 12000);
+    String content = Json.optional(b, "content", "", 12000);
+    List<Attachments.Upload> uploads = Attachments.validate(b);
+    String thinking = Attachments.thinking(b);
+    if (content.isBlank() && uploads.isEmpty())
+      throw new ApiError(400, "CONTENT_REQUIRED", "正文或附件至少提供一项");
     ArrayNode ids = Json.strings(b, "sourceIds");
     for (JsonNode v : ids) {
       ObjectNode source = s.get("source", v.asText());
@@ -169,7 +175,17 @@ class Domain {
                 "uncertainties",
                 Json.arr(),
                 "mode",
-                c.mode()));
+                c.mode(),
+                "thinking",
+                thinking));
+    ArrayNode metadata = attachments.save(id, user.path("id").asText(), uploads);
+    user.set("attachments", metadata);
+    s.db.update(
+        "UPDATE records SET data=?::jsonb WHERE id=?::uuid",
+        user.toString(),
+        user.path("id").asText());
+    ArrayNode attachmentIds = Json.arr();
+    metadata.forEach(meta -> attachmentIds.add(meta.path("id")));
     return s.job(
         "chat",
         id,
@@ -183,7 +199,11 @@ class Domain {
             "userMessageId",
             user.path("id"),
             "autoTitle",
-            autoTitle),
+            autoTitle,
+            "thinking",
+            thinking,
+            "attachmentIds",
+            attachmentIds),
         c.mode());
   }
 

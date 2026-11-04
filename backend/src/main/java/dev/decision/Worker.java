@@ -134,6 +134,13 @@ class Worker {
   }
 
   void fail(String id, ApiError error) {
+    List<String> messages =
+        s.db.queryForList(
+            "SELECT input->>'userMessageId' FROM jobs WHERE id=?::uuid AND"
+                + " input->>'operation'='chat'",
+            String.class,
+            id);
+    for (String message : messages) if (message != null) d.attachments.failPending(message, error);
     ObjectNode job = s.get("job", id);
     job.put("status", "failed");
     job.set("error", error.detail());
@@ -226,6 +233,7 @@ class Worker {
 
   void chat(ObjectNode work) {
     String p = work.path("problemId").asText();
+    d.attachments.process(work);
     Model.Context ctx = model.context(p, work);
     ObjectNode response = model.call(ctx, false);
     s.write(
@@ -234,6 +242,10 @@ class Worker {
           String content = Json.required(response, "content", 20000);
           ArrayNode citations = model.citations(response.get("evidence"), ctx, evidence);
           ArrayNode uncertainties = Json.strings(response, "uncertainties");
+          if (!ctx.attachments().notices().isEmpty()) {
+            ctx.attachments().notices().forEach(uncertainties::add);
+            content = "附件读取说明：" + String.join("；", ctx.attachments().notices()) + "\n\n" + content;
+          }
           if (response.path("evidence").size() > citations.size())
             uncertainties.add("部分模型引用无法核验，已移除；相关陈述未获得来源支持。");
           if (citations.isEmpty()) uncertainties.add("本回答没有可核验的来源引用，请勿当作已证实的个人事实。");
@@ -273,7 +285,11 @@ class Worker {
                       "uncertainties",
                       uncertainties,
                       "mode",
-                      c.mode()));
+                      c.mode(),
+                      "thinking",
+                      work.path("thinking").asText("off"),
+                      "attachments",
+                      Json.arr()));
           success(
               work.path("jobId").asText(),
               Json.obj(
