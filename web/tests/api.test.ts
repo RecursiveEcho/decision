@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { list, request, setSession, token, waitJob } from "../src/api";
+import { logout, list, request, setSession, token, waitJob } from "../src/api";
 let ended: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   vi.useFakeTimers();
@@ -22,6 +22,34 @@ const json = (data: unknown, status = 200) =>
     headers: { "Content-Type": "application/json" },
   });
 describe("API boundary", () => {
+  it("aborts in-flight writes on logout without retrying", async () => {
+    const fetch = vi.fn(
+      (_url, options) =>
+        new Promise((_resolve, reject) => {
+          options.signal.addEventListener("abort", () =>
+            reject(new Error("aborted")),
+          );
+        }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const pending = request("/problems", "POST", { title: "synthetic" });
+    const rejection = expect(pending).rejects.toMatchObject({ status: 499 });
+    logout();
+    await rejection;
+    await vi.runAllTimersAsync();
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  it("does not retry an old request after logout during backoff", async () => {
+    const fetch = vi.fn().mockRejectedValue(new Error("offline"));
+    vi.stubGlobal("fetch", fetch);
+    const pending = request("/problems", "POST", { title: "synthetic" });
+    const rejection = expect(pending).rejects.toMatchObject({ status: 499 });
+    await vi.advanceTimersByTimeAsync(10);
+    logout();
+    await vi.runAllTimersAsync();
+    await rejection;
+    expect(fetch).toHaveBeenCalledOnce();
+  });
   it("reuses POST key after network failure", async () => {
     const fetch = vi
       .fn()

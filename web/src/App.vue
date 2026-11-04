@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { list, logout, request, setSession, token, waitJob } from "./api";
+import {
+  ApiError,
+  list,
+  logout,
+  request,
+  setSession,
+  token,
+  waitJob,
+} from "./api";
 import DeviceRegistration from "./DeviceRegistration.vue";
 import type {
   Decision,
@@ -96,7 +104,8 @@ async function act(fn: () => Promise<void>) {
   try {
     await fn();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "操作失败";
+    if (!(e instanceof ApiError && e.status === 499))
+      error.value = e instanceof Error ? e.message : "操作失败";
   } finally {
     busy.value = false;
   }
@@ -131,7 +140,12 @@ function clearData() {
 }
 async function loadProblems() {
   problems.value = await list<Problem>("/problems");
-  if (!selected.value) selected.value = problems.value[0]?.id || "";
+  if (!problems.value.some((p) => p.id === selected.value))
+    selected.value = problems.value[0]?.id || "";
+}
+async function refresh() {
+  await loadProblems();
+  await load();
 }
 async function load() {
   const g = ++generation,
@@ -406,9 +420,7 @@ onUnmounted(() => {
         </button>
       </nav>
       <div class="aside-foot">建议供你判断<br />决定由你确认</div>
-      <button class="secondary" :disabled="busy" @click="logout">
-        退出登录
-      </button>
+      <button class="secondary" @click="logout">退出登录</button>
     </aside>
     <main>
       <header>
@@ -417,7 +429,7 @@ onUnmounted(() => {
           <h1>{{ problem?.title || "从一个真实问题开始" }}</h1>
           <p v-if="problem">{{ problem.goal }}</p>
         </div>
-        <button class="secondary" :disabled="busy" @click="act(load)">
+        <button class="secondary" :disabled="busy" @click="act(refresh)">
           刷新
         </button>
       </header>

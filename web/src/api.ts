@@ -1,5 +1,6 @@
 import type { Job } from "./types";
 const SESSION = "decision.session";
+let sessionRequests = new AbortController();
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -20,6 +21,8 @@ export function setSession(s: { accessToken: string; expiresAt: string }) {
   sessionStorage.setItem(SESSION, JSON.stringify(s));
 }
 export function logout() {
+  sessionRequests.abort();
+  sessionRequests = new AbortController();
   sessionStorage.removeItem(SESSION);
   window.dispatchEvent(new Event("session-ended"));
 }
@@ -31,10 +34,16 @@ export async function request<T>(
   body?: unknown,
   key?: string,
 ): Promise<T> {
+  const sessionSignal = sessionRequests.signal;
+  const checkSession = () => {
+    if (sessionSignal.aborted)
+      throw new ApiError("已退出登录，停止等待请求。", 499);
+  };
   // One key per logical POST, reused across transport retries.
   const idempotencyKey =
     method === "POST" ? key || crypto.randomUUID() : undefined;
   for (let attempt = 0; attempt < 3; attempt++) {
+    checkSession();
     let response: Response;
     try {
       response = await fetch(`/api/v1${path}`, {
@@ -45,9 +54,10 @@ export async function request<T>(
           ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
         },
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.any([sessionSignal, AbortSignal.timeout(30000)]),
       });
     } catch {
+      checkSession();
       if (attempt < 2) {
         await sleep(500 * 2 ** attempt);
         continue;
@@ -56,6 +66,7 @@ export async function request<T>(
         "连接失败，结果可能尚未返回；请刷新记录确认，避免重复提交。",
       );
     }
+    checkSession();
     if (response.status === 401) {
       logout();
       throw new ApiError("访问码无效或登录已过期，请重新登录。", 401);
@@ -71,11 +82,16 @@ export async function request<T>(
         continue;
       }
       throw new ApiError(
-        data?.error?.message || `请求未完成（${response.status}）`,
+        data?.error?.message ||
+          (response.status >= 500
+            ? `服务暂时不可用（${response.status}），请稍后刷新或确认后端已启动。`
+            : `请求未完成（${response.status}）`),
         response.status,
       );
     }
-    return response.status === 204 ? (undefined as T) : await response.json();
+    const result = response.status === 204 ? undefined : await response.json();
+    checkSession();
+    return result as T;
   }
   throw new ApiError("连接失败");
 }
