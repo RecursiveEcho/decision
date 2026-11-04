@@ -2,7 +2,7 @@
 
 遵守用户的全局工程协作要求；每个新工程任务先做独立只读子 Agent 审查，不递归审查。用户已要求准备开发、当天交付可试用 MVP，并明确允许后续代码推送到本仓库；没有授权自动合并、改仓库可见性或在现有 TGA 服务器部署。
 
-- 先读 `PROJECT_STATE.md`、`docs/mvp/PLAN.md`、`CONTRACT.md` 和本角色任务卡。
+- 先读 `PROJECT_STATE.md`、`docs/mvp/PLAN.md`、`docs/mvp/CONTRACT.md` 和本角色任务卡。
 - 一角色一个 worktree 和功能分支；不能在共享物理目录切分支，不能直接向 main/master 提交。
 - A 独占 `backend/`，B 独占 `web/`，C 独占 `observer/`，D 独占 `miniprogram/`；各自可改 `handoffs/<角色>.md`。E 总控拥有根目录、`docs/`、`deploy/`、`scripts/`、集成检查与契约。
 - 不跨目录修同伴文件；接口缺口写进本角色回执并告知总控，不能私自创造另一套公共字段。必要的接口调整由 E 统一更新并同步到各分支。

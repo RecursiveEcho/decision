@@ -2,7 +2,11 @@
 
 仅本人使用。目标是把对话、本人提供的资料和经授权的电脑观察，变成有来源、可纠正、可复盘的决策讨论。
 
-**当前基础服务已实现，业务模块正在集成，尚未完成 MVP 联调。**
+**第一版网页 MVP 已在本机运行；真实模型、Wiki、决定和复盘已有验证。最终检查与功能边界见 [总控回执](handoffs/E.md)。**
+
+本机打开 http://127.0.0.1:8088 ，访问码在忽略的 `.local/login.txt`。重启用 `python3 scripts/manage.py up`，停止用 `python3 scripts/manage.py stop`（数据保留）。另一台机器首次使用请按 [运行说明](deploy/README.md) 配置和构建。
+
+录屏保持关闭；小程序尚无真机验收，手机通知和远程服务器尚未部署。
 
 ## 开发入口
 
@@ -13,7 +17,7 @@
 5. [交接状态](PROJECT_STATE.md)：实际进度与外部依赖。
 6. [本地运行与备份](deploy/README.md)：环境配置、独立基础服务与运行命令。
 
-执行基线建议：Java 17 / Spring Boot 3.5.x / PostgreSQL；Vue 3 + Vite + TypeScript；原生微信小程序；Python 本地观察适配器。DeepSeek 为已确定模型提供方，Pensieve、Wiki.js 为待实测的组件。具体补丁版本由对应负责人验证并锁定。
+执行基线：Java 17 / Spring Boot 3.5.x / PostgreSQL；Vue 3 + Vite + TypeScript；原生微信小程序；Python 本地观察适配器。DeepSeek 已完成真实调用；Wiki.js 2.5.317 已完成实际创建、更新与回读；Pensieve 0.37.0 已安装核验，真实 OCR/录屏待本人明确开启后验证。模块依赖及镜像版本已锁定。
 
 不在公开仓库保存真实个人目标、聊天、文章全文、截图、运行数据库、账号或密钥。测试使用虚构样例，真实资料在运行时由本人提供。
 

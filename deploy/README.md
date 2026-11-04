@@ -48,3 +48,15 @@ verify-backup 在两个数据库服务中各创建随机临时数据库，将 du
 先记录本地实际内存、CPU、数据增长，再只读核验候选服务器。与 TGA 共机须有足够余量、独立数据卷/账号/端口、备份及故障隔离。真实部署还需要 HTTPS、域名和小程序平台接入条件；本机成功不等于已上线。
 
 镜像已固定 digest，开发模块依赖由各模块锁文件固定。后端构建镜像由 A 管理，初次构建时仍需网络下载依赖。
+
+## 只试桌面提醒，不开观察
+
+本机工程验收已准备一个暂停状态的专用测试设备及私有配置。需要试持续提醒时，在项目根目录前台运行：
+
+```sh
+uv run --project observer --python 3.12 python -m decision_observer --home .local/notification-test notifications
+```
+
+Ctrl-C 停止。此命令只轮询通知，不访问 Pensieve 或屏幕；本轮交付未自动启动它。`manage.py stop` 管理 Compose，不能替代在通知终端 Ctrl-C。系统接受通知不代表通知权限/专注模式允许本人看到。
+
+另一台电脑或换设备时，先在网页注册设备保存一次性凭据，再按 `observer/README.md` 的 `configure --notifications-only` 配置，不需要安装或开启录屏。
