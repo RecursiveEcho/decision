@@ -95,9 +95,13 @@ def title(value):
 
 def body(value):
     # The mirror does not load remote images or carry executable HTML from model prose.
-    value = re.sub(r'!\[([^\]]*)\]\([^)]*\)', r'[图片未导出：\1]', str(value))
-    value = re.sub(r'!\[\[[^\]]*\]\]', '[附件未导出]', value)
-    return re.sub(r'<[^>]*>', '', value).strip()
+    parts = re.split(r'(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)', str(value))
+    for index in range(0, len(parts), 2):
+        text = re.sub(r'!\[([^\]]*)\](?:\([^)]*\)|\[[^\]]*\])?', r'[图片未导出：\1]', parts[index])
+        text = re.sub(r'!\[\[[^\]]*\]\]', '[附件未导出]', text)
+        # Escape HTML starts while retaining generic types/comparisons as visible text.
+        parts[index] = text.replace('<', '&lt;')
+    return ''.join(parts).strip()
 
 
 def link(path, label):
@@ -158,6 +162,11 @@ def render(snapshot):
         text += f'# {title(item.get("title"))}\n\n'
         text += '> 讨论整理，经本人确认保存；不代表外部结论已被独立证实。\n'
         text += '> 本机单向镜像；修改请回到项目继续讨论并确认。附件原件未导出。\n\n'
+        coverage = item.get('coverage', {})
+        if coverage.get('notice'):
+            text += '> 整理范围：' + body(coverage['notice']).replace('\n', ' ') + '\n\n'
+        if coverage.get('truncated'):
+            text += '> 本次输入有截断或有界筛选，不代表完整检查全部对话与知识。\n\n'
         text += body(item.get('markdown', '')) + '\n\n'
         if labels:
             text += '## 所属领域\n\n' + ' · '.join(link(domain_path(d), d) for d in labels) + '\n\n'
@@ -270,6 +279,7 @@ def apply_snapshot(snapshot, vault):
             for name, value in mapping.items():
                 allowed.setdefault(name, set()).add(value)
     # Validate every old path, new path, collision and local edit before the first write/delete.
+    effective = {}
     for relative in set(allowed) | set(plan):
         if not managed_name(relative):
             raise SyncError('清单包含越界路径，未修改。')
@@ -280,14 +290,10 @@ def apply_snapshot(snapshot, vault):
             actual = digest(path.read_bytes())
             if actual not in allowed.get(relative, set()):
                 raise SyncError('发现本机修改或同名文件，已暂停覆盖；请先将手写内容移到专用目录之外。')
+            effective[relative] = actual
     hashes = {name: digest(content) for name, content in plan.items()}
     changed = 0
     vault.mkdir(parents=True, exist_ok=True, mode=0o700)
-    effective = {}
-    for name in allowed:
-        path = vault / name
-        if path.exists():
-            effective[name] = digest(path.read_bytes())
     needs_update = effective != hashes or managed != hashes or not manifest_path.exists()
     if needs_update:
         atomic_write(journal_path, json_bytes({'owner': MARKER, 'base': managed, 'previous': effective, 'next': hashes}))
@@ -296,11 +302,13 @@ def apply_snapshot(snapshot, vault):
     for name, content in plan.items():
         target = vault / name
         if hashes[name] != effective.get(name) or not target.exists():
+            verify_unchanged(target, effective.get(name))
             atomic_write(target, content)
             changed += 1
     for name in set(effective) - set(plan):
         target = safe_path(vault / name)
         if target.exists():
+            verify_unchanged(target, effective[name])
             target.unlink()
             changed += 1
     if needs_update:
@@ -309,6 +317,13 @@ def apply_snapshot(snapshot, vault):
         journal_path.unlink()
     return {'entries': len(snapshot['entries']), 'domains': len(snapshot.get('domains', [])),
             'files': len(plan), 'changedFiles': changed}
+
+
+def verify_unchanged(path, expected):
+    path = safe_path(path)
+    actual = digest(path.read_bytes()) if path.is_file() else None
+    if actual != expected or (path.exists() and not path.is_file()):
+        raise SyncError('同步期间检测到本机修改，已停止覆盖；请先保留手写内容。')
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

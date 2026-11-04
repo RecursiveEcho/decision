@@ -142,6 +142,42 @@ class MirrorTest(unittest.TestCase):
         self.assertNotIn('<script>', note)
         self.assertNotIn('![[', note)
 
+    def test_generic_types_comparisons_and_code_survive_sanitizing(self):
+        content = 'List<String> 与 a < b && b > c\n`List<String>`\n```java\nList<String> a;\n```'
+        sanitized = sync.body(content)
+        self.assertIn('List&lt;String>', sanitized)
+        self.assertIn('a &lt; b && b > c', sanitized)
+        self.assertIn('`List<String>`', sanitized)
+        self.assertIn('```java\nList<String> a;\n```', sanitized)
+        self.assertNotIn('![tracking]', sync.body('![tracking][img]\n[img]: https://example.invalid/a.png'))
+
+    def test_file_changed_after_preflight_is_not_overwritten_or_deleted(self):
+        data = fixture()
+        sync.sync_snapshot(data, self.vault)
+        original = sync.atomic_write
+        path = self.vault / sync.entry_path(E1)
+
+        def mutate_after_preflight(target, content):
+            result = original(target, content)
+            if target.name == sync.JOURNAL:
+                path.write_text('同步期间的手写内容')
+            return result
+
+        with patch.object(sync, 'atomic_write', side_effect=mutate_after_preflight):
+            with self.assertRaises(sync.SyncError):
+                sync.sync_snapshot({'version': 1, 'entries': [], 'domains': []}, self.vault)
+        self.assertEqual('同步期间的手写内容', path.read_text())
+        with self.assertRaises(sync.SyncError):
+            sync.sync_snapshot(data, self.vault)
+        self.assertEqual('同步期间的手写内容', path.read_text())
+
+    def test_project_stop_continues_when_mirror_stop_is_pending(self):
+        import manage
+        with patch('sys.argv', ['manage.py', 'stop']), patch.object(sync, 'stop',
+                side_effect=sync.SyncError('synthetic timeout')), patch.object(manage, 'compose') as compose:
+            manage.main()
+        compose.assert_called_once_with('--profile', 'app', 'stop')
+
     def test_redirect_and_nonlocal_auth_destinations_refused(self):
         for address in ['https://127.0.0.1/api/v1', 'http://example.com/api/v1',
                         'http://user:pass@127.0.0.1/api/v1', 'http://127.0.0.1/?secret=1']:

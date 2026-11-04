@@ -200,8 +200,12 @@ def main():
         knowledge_sync.start()
     elif args.command == 'stop':
         import knowledge_sync
-        knowledge_sync.stop()
-        compose('--profile', 'app', 'stop')
+        try:
+            knowledge_sync.stop()
+        except (knowledge_sync.SyncError, OSError):
+            print('知识同步停止请求尚未完成；继续停止项目服务，镜像将在当前操作结束后退出。')
+        finally:
+            compose('--profile', 'app', 'stop')
         print('Containers stopped; data volumes retained. Observer is managed separately.')
     elif args.command == 'status':
         status()
