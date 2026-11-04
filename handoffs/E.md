@@ -106,3 +106,12 @@ E根npm ci/28测试/build通过，生产`index-DuoSLn3Y.js`/`index-DG1nVT3x.css`
 - 最终V1–V7迁移，189records/4attachments重启哈希一致；备份20261104T155022Z恢复decision16表/wiki32表，原件/metadata/parsed/关联相同；临时容器库均已清理。B最终GET回读无错误/写入，自有session/IDB/Blob/窗口清理，用户窗口未动。
 - Docker标准dependency:go-offline步骤停滞后停止；同提交本机Maven package+原固定JRE运行阶段部署，JAR SHA256一致。最高档未单独真实付费调用；记忆不是Mem0 SDK/向量服务，采用其公开方法适配并保守处理歧义。工程通过不替代本人审美和实际使用反馈。
 - 详细证据/范围见docs/mvp/CONVERSATIONAL_ASSISTANT.md；本机私有证据只留忽略目录。未启用采集/通知、未部署TGA或公网、未提交个人数据/密钥。
+
+
+## 2026-11-05 记忆提炼与资料入口交付
+
+A127189b及回执4965c7e、B44f0971/07f29b2/a816c39及回执3bc0446已集成部署。根后端109/网页47测试、类型检查/构建通过；实际JAR和JS/CSS与构建一致。概览是可追溯的只读事实投影，持久缓存按完整eligible指纹失效，不重写原记忆、不替换检索引擎。默认少量短重点，原话和操作展开；全部原记录可读。新对话资料入口读全局，不误绑定旧对话。
+
+隔离实际模型2调用验证6条合4点，近义/否定/跨problem边界保留；忘记后旧结果失效，再生成3点无已忘记refs。fixture创建8条，既有invalidation软删inferred后实际可见7条，按实记录。B桌面/390真实3点、详情和生产empty/全部17通过；资料入口及草稿/PNG/max保留通过，业务仅GET、0页面错误和横向溢出，usage分别2/36不变。E目视真实截图，生产原189条哈希不变，无迁移。全部自有会话/窗口/18080/18088/临时库清理，用户窗口未动。
+
+细节及局限见docs/mvp/CONVERSATIONAL_ASSISTANT.md；Wiki运行、协作写作与知识库维护留待用户后续讨论，不新增流程。没有改TGA、公网部署、采集或通知；原始证据/截图只留忽略目录。
