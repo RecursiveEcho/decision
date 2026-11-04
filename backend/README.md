@@ -32,3 +32,14 @@ Java 17、Spring Boot 3.5.16、PostgreSQL 16+、Flyway；运行接口见 [openap
 - 列表当前在内存中按稳定时间+ID排序和签名游标分页，适用于个人 MVP；长时间观察量大时需改数据库键集分页。仅运行一个后端实例；重启恢复暂不支持多副本租约。
 - 仅桌面 Delivery 排队和 ack；`sent` 只证明通知 API 接受。真实屏幕采集、通知可见、手机与真机验收由对应角色/用户提供证据。
 - `/health` 只报告应用可用，不返回密钥；异常与上游失败不返回原始响应或敏感正文。数据库直连避免桌面系统 SOCKS 代理误接管 JDBC，不改变系统网络配置。
+
+
+## 显式重新分析与模型诊断
+
+`POST /api/v1/problems/{id}/analyze`，body `{}`，owner Bearer + `Idempotency-Key`，返回202 analysis Job。已有queued/running分析时复用任务；否则创建新任务并读取当前来源/记忆，不复制Source或用户Message，旧失败Job保留。缺少来源返回400/NO_SOURCES。此接口由E统一补入共享契约，用于网页“重新分析资料”。
+
+模型请求显式 `thinking:{type:"disabled"}`，保留4000 token上限并提供合法JSON示例与输出规模限制；无自动循环重试。分别返回MODEL_TRUNCATED、MODEL_EMPTY、MODEL_INVALID_JSON、MODEL_SCHEMA、MODEL_INCOMPLETE，均可由本人明确重试。Flyway V2只新增problem/operation、结束原因、内容类型/长度、reasoning长度及usage等诊断元信息，不保存模型原文、reasoning内容、完整prompt或key；失败请求实际usage不再丢失。旧记录没有这些元信息，不能倒推历史失败原因。
+
+重试单个已知合成问题并真实回读Wiki：`python3 tools/live_smoke.py /path/to/ignored/.env http://127.0.0.1:8088 --reanalyze PROBLEM_UUID`。不会另起服务，不重复创建来源/消息/主题。
+
+官方依据：[JSON Output](https://api-docs.deepseek.com/guides/json_mode/)、[Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/)。

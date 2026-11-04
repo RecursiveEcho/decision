@@ -55,6 +55,7 @@ route('patch','/problems/{id}',ref('Problem'),body={'title':string(),'goal':stri
 route('post','/problems/{id}/messages',ref('Job'),202,{'content':string(),'sourceIds':arr(uuid)},['content'])
 route('get','/problems/{id}/messages',obj({'items':arr(ref('Message')),'nextCursor':string(True)}),query=['cursor','limit'])
 route('get','/jobs/{id}',ref('Job'))
+route('post','/problems/{id}/analyze',ref('Job'),202,{})
 route('post','/sources',ref('Job'),202,{'problemId':uuid,'kind':enum('article','user_statement'),'title':string(),'text':string(),'url':string(),'author':string()},['problemId','kind'])
 route('get','/sources/{id}',ref('Source'))
 route('delete','/sources/{id}',None,204)

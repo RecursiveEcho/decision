@@ -78,6 +78,19 @@ class Domain {
         c.mode());
   }
 
+  ObjectNode reanalyze(String id) {
+    s.get("problem", id);
+    List<String> active =
+        s.db.queryForList(
+            "SELECT id::text FROM jobs WHERE problem_id=?::uuid AND state IN ('queued','running')"
+                + " AND input->>'operation'='analysis' ORDER BY created_at LIMIT 1",
+            String.class,
+            id);
+    if (!active.isEmpty()) return s.get("job", active.get(0));
+    if (s.all("source", id).isEmpty()) throw new ApiError(400, "NO_SOURCES", "请先添加资料再分析");
+    return s.analyze(id, c.mode());
+  }
+
   ObjectNode chat(String id, JsonNode b) {
     s.get("problem", id);
     String content = Json.required(b, "content", 12000);

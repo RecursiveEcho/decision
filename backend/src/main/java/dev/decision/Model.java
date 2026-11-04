@@ -97,10 +97,14 @@ class Model {
             + " supports/contradicts/context，不得虚构引用。";
     String format =
         analysis
-            ? "返回 {topic:{title,viewpoints:string[],conditions:string[],uncertainties:string[],evidence:[]},discussions:[{title,reason,evidence}],memories:[{content,evidence}]}。topic"
-                  + " 必须综合本问题所给文章提炼观点、适用条件、不确定性及真实原文依据，相关资料归入一个主题。无值得打扰的冲突时"
-                  + " discussions=[]；最多一个讨论、两条推断记忆；讨论或推断都必须有有效引用。"
-            : "返回 {content:string,evidence:[],uncertainties:string[]}，建议解释理由、风险、可选行动和未知，保留本人最终决定。";
+            ? "返回且只返回一个 JSON 对象，字段全部保留。下列是合法 JSON 形状示例（示例占位符不能作为事实或来源）："
+                  + "{\"topic\":{\"title\":\"主题标题\",\"viewpoints\":[\"来源作者的观点\"],\"conditions\":[\"适用条件\"],\"uncertainties\":[\"尚未确认的事项\"],\"evidence\":[]},\"discussions\":[],\"memories\":[]}。"
+                  + "topic必须综合本问题所给文章提炼观点、适用条件、不确定性及真实原文引用，相关资料归入一个主题。引用对象形状为"
+                  + "{\"sourceId\":\"输入中的实际来源ID\",\"quote\":\"实际逐字原文\",\"relation\":\"context\"}。不得使用占位符。"
+                  + "观点最多5条，条件和未知各最多4条，每条最多150字，引用最多8条且每条最多200字。无值得打扰的冲突时discussions=[]；"
+                  + "最多一个讨论（title/reason/evidence）、两条推断记忆（content/evidence）。所有讨论和推断均须有有效引用。禁止返回数组、字符串、null或Markdown代码块作为顶层。"
+            : "返回且只返回一个JSON对象，合法形状示例为{\"content\":\"讨论正文\",\"evidence\":[],\"uncertainties\":[\"尚待确认的事项\"]}。"
+                  + "正文最多1500字，引用最多8条，每条最多200字；使用实际sourceId和逐字quote及relation。建议解释理由、风险、选项与未知，保留本人最终决定。禁止返回数组或字符串作为顶层。";
     ObjectNode payload =
         Json.obj(
             "model",
@@ -111,36 +115,100 @@ class Model {
                 .add(Json.obj("role", "user", "content", ctx.input.toString())),
             "response_format",
             Json.obj("type", "json_object"),
+            "thinking",
+            Json.obj("type", "disabled"),
             "max_tokens",
             4000);
+    JsonNode response = null;
+    String raw = "", type = "unavailable";
     try {
-      JsonNode response =
+      response =
           Upstream.post(
               c.modelBase.replaceAll("/+$", "") + "/chat/completions", c.modelKey, payload);
-      String raw = response.path("choices").path(0).path("message").path("content").asText();
+      JsonNode choice = response.path("choices").path(0);
+      raw = choice.path("message").path("content").asText("");
+      String finish = choice.path("finish_reason").asText("");
+      if (finish.equals("length"))
+        throw new ApiError(502, "MODEL_TRUNCATED", "模型输出达到上限，未保存不完整结果；可明确重试", true);
+      if (!finish.equals("stop"))
+        throw new ApiError(502, "MODEL_INCOMPLETE", "模型未正常结束，未保存结果；可明确重试", true);
+      if (raw.isBlank()) throw new ApiError(502, "MODEL_EMPTY", "模型返回空内容；可明确重试", true);
       JsonNode parsed;
       try {
         parsed = Json.parse(raw);
       } catch (ApiError e) {
-        throw new ApiError(502, "MODEL_FORMAT", "模型返回格式不符合 JSON 约定");
+        type = "invalid_json";
+        throw new ApiError(502, "MODEL_INVALID_JSON", "模型未返回有效JSON；可明确重试", true);
       }
-      if (!parsed.isObject()) throw new ApiError(502, "MODEL_FORMAT", "模型返回格式不符合约定");
-      s.db.update(
-          "INSERT INTO model_calls(id,model,status,input_tokens,output_tokens) VALUES"
-              + " (?::uuid,?,'succeeded',?,?)",
-          Json.id(),
-          response.path("model").asText(c.modelName),
-          Math.max(0, response.path("usage").path("prompt_tokens").asLong()),
-          Math.max(0, response.path("usage").path("completion_tokens").asLong()));
+      type = parsed == null ? "missing" : parsed.getNodeType().name().toLowerCase(Locale.ROOT);
+      if (parsed == null || !parsed.isObject())
+        throw new ApiError(502, "MODEL_SCHEMA", "模型JSON顶层必须是对象；可明确重试", true);
+      validateShape(parsed, analysis);
+      recordCall(ctx, analysis, response, raw, type, "succeeded");
       return (ObjectNode) parsed;
     } catch (ApiError e) {
-      s.db.update(
-          "INSERT INTO model_calls(id,model,status) VALUES (?::uuid,?,?)",
-          Json.id(),
-          c.modelName,
-          e.code);
+      recordCall(ctx, analysis, response, raw, type, e.code);
       throw e;
     }
+  }
+
+  void validateShape(JsonNode result, boolean analysis) {
+    boolean valid;
+    if (analysis) {
+      JsonNode topic = result.path("topic");
+      valid =
+          topic.isObject()
+              && topic.path("title").isTextual()
+              && topic.path("viewpoints").isArray()
+              && topic.path("conditions").isArray()
+              && topic.path("uncertainties").isArray()
+              && topic.path("evidence").isArray()
+              && result.path("discussions").isArray()
+              && result.path("memories").isArray();
+    } else
+      valid =
+          result.path("content").isTextual()
+              && !result.path("content").asText().isBlank()
+              && result.path("evidence").isArray()
+              && result.path("uncertainties").isArray();
+    if (!valid) throw new ApiError(502, "MODEL_SCHEMA", "模型JSON缺少必需字段或字段类型不符；可明确重试", true);
+  }
+
+  void recordCall(
+      Context ctx, boolean analysis, JsonNode response, String raw, String type, String status) {
+    JsonNode value = response == null ? Json.obj() : response;
+    String finish = value.path("choices").path(0).path("finish_reason").asText("");
+    if (!Set.of(
+            "stop",
+            "length",
+            "content_filter",
+            "tool_calls",
+            "insufficient_system_resource",
+            "aborted")
+        .contains(finish)) finish = "unknown";
+    String actualModel = value.path("model").asText(c.modelName);
+    if (!actualModel.matches("[A-Za-z0-9._:/-]{1,100}")) actualModel = c.modelName;
+    s.db.update(
+        "INSERT INTO"
+            + " model_calls(id,model,status,input_tokens,output_tokens,problem_id,operation,finish_reason,content_length,content_type,reasoning_length)"
+            + " VALUES (?::uuid,?,?,?,?,?::uuid,?,?,?,?,?)",
+        Json.id(),
+        actualModel,
+        status,
+        Math.max(0, value.path("usage").path("prompt_tokens").asLong()),
+        Math.max(0, value.path("usage").path("completion_tokens").asLong()),
+        ctx.problemId(),
+        analysis ? "analysis" : "chat",
+        finish,
+        raw.length(),
+        type,
+        value
+            .path("choices")
+            .path(0)
+            .path("message")
+            .path("reasoning_content")
+            .asText("")
+            .length());
   }
 
   ArrayNode citations(JsonNode response, Context ctx, Evidence e) {
