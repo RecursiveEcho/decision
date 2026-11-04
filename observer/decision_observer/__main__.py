@@ -43,12 +43,13 @@ def main():
     if a.command == 'status':
         path = home/'status.json'
         state = json.loads(path.read_text()) if path.exists() else {'reportedState':'paused','localConsent':False}
+        running = False
         with open(home/'run.lock','a') as lock:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
                 state.update(reportedState='paused', localConsent=False)
-            except BlockingIOError: pass
-        if (home/'pause.request').exists(): state.update(reportedState='pausing',localConsent=False)
+            except BlockingIOError: running = True
+        if running and (home/'pause.request').exists(): state.update(reportedState='pausing',localConsent=False)
         state['captureState'] = 'unverified'
         state['captureNotice'] = '底层 Pensieve 采集由其独立控制，未确认停止'
         print(json.dumps(state,ensure_ascii=False,indent=2)); return

@@ -25,7 +25,7 @@ uv run python -m decision_observer status
 uv run python -m decision_observer run --problem-id <问题UUID>
 ```
 
-两步缺一都不能读取/上传观察。run 前的数据不会补采。`run` **不会启动 Pensieve 本身**。运行中上传当前选定问题的 OCR 文字及数字 entity/library 定位符，不上传图片、文件路径、窗口标题或其他元数据。原文最多 20000 字符，明确截断；OCR 未完成会在近期窗口重读。
+两步缺一都不能读取/上传观察。run 前的数据不会补采。`run` **不会启动 Pensieve 本身**。运行中上传当前选定问题的 OCR 文字及数字 entity/library 定位符，不上传图片、文件路径、窗口标题或其他元数据。原文最多 20000 个 UTF-16 单元（与 Java 后端一致，不切断 emoji），明确截断；OCR 未完成会在近期窗口重读。
 
 另一终端暂停，或在运行终端 Ctrl-C：
 
@@ -57,7 +57,7 @@ uv run python -m decision_observer notifications --once
 
 ## 当前验收边界
 
-已验证：30 项合成/本机 HTTP 测试、Python wheel/sdist 构建、默认暂停状态。未验证：真实中文 OCR、总控业务实例的 device 配对、Pensieve 底层启停、真实系统通知到达及用户看到、实际资源占用。没有读取个人历史，没有实际观察或通知验收结论。
+已验证：34 项合成/本机 HTTP 测试、Python wheel/sdist 构建、默认暂停状态。未验证：真实中文 OCR、总控业务实例的 device 配对、Pensieve 底层启停、真实系统通知到达及用户看到、实际资源占用。没有读取个人历史，没有实际观察或通知验收结论。
 
 ## 已准备的 Pensieve 独立环境
 
@@ -85,3 +85,6 @@ uv run python scripts/backend_smoke.py --jar /path/to/decision-backend-0.1.0.jar
 已验证暂停拒绝、设备越权拒绝、心跳上传、去重、hash 校验、locator 回查、暂停竞争后恢复、20 条长中文分成 3 批、21 条合成 Delivery 分页/失败退避/跨设备 ack 拒绝。Delivery 由临时数据库直接注入测试夹具，系统通知函数用替身；不证明真实模型生成议题或通知到达。日期/结果见 `handoffs/C.md`。
 
 定位编码经 E 确认：`resourceId=pensieve:library:<数字ID>`，`frameId=pensieve:entity:<数字ID>`，不含文件路径。HTTP 批次同时受 50 条和实际 JSON 编码 900000 字节限制，兼容后端 1 MiB 上限。明确返回 rejected 的条目会更换请求幂等键后等待本人显式重启；网络结果未知保留原 key，避免重复写入。
+
+
+“稍后提醒”兼容：对同一 delivery，后端重新置为 pending 且 updatedAt 改变时，适配器视为新通知轮次。新轮次会再次显示并使用独立 ack 幂等 key；同一轮的网络/ack 重试不会重复调用通知接口。升级旧本地通知库时，缺少轮次的 pending 通知会重新进入一次显示流程，避免吞掉提醒。该行为已通过真实后端＋合成通知替身验证，不等于 macOS 实际送达。

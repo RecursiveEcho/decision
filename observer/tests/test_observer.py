@@ -164,6 +164,23 @@ class Tests(unittest.TestCase):
     def test_locator_uses_supported_opaque_ids(self):
         now=datetime.now(timezone.utc); item=observation(entity(now,42),CONFIG,PROBLEM,now,now)
         self.assertEqual(item['sourceLocator'],{'resourceId':'pensieve:library:1','frameId':'pensieve:entity:42'})
+    def test_emoji_respects_java_utf16_limits(self):
+        now=datetime.now(timezone.utc); e=entity(now)
+        e['metadata_entries']=[{'key':'ocr_result','value':json.dumps([{'rec_txt':'中'+'😀'*12000}])},{'key':'active_app','value':'😀'*150}]
+        item=observation(e,CONFIG,PROBLEM,now,now)
+        self.assertLessEqual(len(item['text'].encode('utf-16-le'))//2,20000)
+        self.assertLessEqual(len(item['appName'].encode('utf-16-le'))//2,200)
+    def test_snooze_requeues_same_delivery_new_generation(self):
+        calls=[]; self.runner.notifier=lambda *a:calls.append(a)
+        delivery={'id':str(uuid.uuid4()),'status':'pending','updatedAt':'2026-11-04T09:00:00Z'}
+        self.api.delivery={'delivery':delivery,'discussion':{'title':'合成稍后提醒','reason':'测试'}}
+        self.runner.deliver(); self.runner.deliver()
+        self.assertEqual(len(calls),1)
+        old_key=self.api.calls[-1][3]
+        delivery['updatedAt']='2026-11-04T09:10:00Z'
+        self.runner.deliver()
+        self.assertEqual(len(calls),2)
+        self.assertNotEqual(self.api.calls[-1][3],old_key)
     def test_applescript_strings_are_data(self):
         with patch('decision_observer.core.sys.platform','darwin'),patch('decision_observer.core.subprocess.run') as run:
             title='" & do shell script "bad'; notify(title,'合成通知'); args=run.call_args.args[0]

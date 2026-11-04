@@ -13,7 +13,7 @@
 | 桌面通知 | core.py notify/deliver、CLI notifications | 替身系统接口、sent/failed、回执重试；真实 macOS 通知未发，点击跳转未实现 |
 | 运行包 | observer/pyproject.toml、uv.lock、README.md | Python 3.12.13，零运行时外部依赖；wheel/sdist 构建通过；status 默认 paused |
 
-自检命令（observer/ 内）：`uv run --python 3.12 python -m unittest discover -s tests -v`：30 项通过；其中 3 项使用真实 loopback HTTP transport + 合成 API，不算真实业务后端/Pensieve 联调。`uv build` 通过；status 本机 CLI 通过。实际采集与资源占用未测。
+自检命令（observer/ 内）：`uv run --python 3.12 python -m unittest discover -s tests -v`：34 项通过；其中 3 项使用真实 loopback HTTP transport + 合成 API，不算真实业务后端/Pensieve 联调。`uv build` 通过；status 本机 CLI 通过。实际采集与资源占用未测。
 
 运行与配对详见 observer/README.md：owner 经 A/B 注册设备，C 仅存 deviceToken；configure → 网页设备 running → 本机 run --problem-id UUID；pause/stop 仅撤销同步同意。notifications 单独轮询，无截图读取。配置位于本机私有目录，真实 token 不在仓库中。
 
@@ -47,3 +47,15 @@
 - 通知夹具直接写入**临时测试库**，notifier为测试替身；不证明真实模型产出议题或macOS通知送达。测试最终将设备paused并清理临时Java进程/PG容器；没有动E业务库、8080、其他项目或TGA。
 - 测试时 A 分支 HEAD 8377431；实际 jar SHA256 `64a194b0ac7cbde1a935a3b1a181c0f4839d9b53d88af77d6e9db842062c5cf2`。后端源码仅只读，未改 A 文件。
 - 后续待 E 集成此次 C 提交；真实 Pensieve/OCR、系统通知送达仍待单独授权与验收。录屏持续关闭，没有启动采集器。
+
+
+## 集成兼容增量 — 2026-11-04 17:53 +08:00
+
+用户继续授权直接修复推送、录屏仍不开；已与 E 同步最新集成状态，并完成独立只读审查。发现后端新增 snooze 重排逻辑与本地 sent 去重冲突，先用失败测试复现；同时复现 emoji 按 Python 字符数截断超过 Java UTF-16 长度限制。
+
+- 新增持久化通知轮次：pending updatedAt 变化代表同一 delivery 的新轮次；重置本地 sent/失败退避，ack key 包含轮次。同轮未知结果重试继续去重，不吞掉稍后提醒。
+- text/appName 按 UTF-16 单元安全截断，再计算 contentHash；不截断代理对。
+- CLI status 仅在运行锁仍被持有且存在暂停请求时显示 pausing；进程已停则准确显示 paused。
+- 34 项单元/loopback HTTP/CLI 子进程测试通过；15 项真实 Java/PostgreSQL 合成联调通过，包括 emoji 长度及 snooze 到期重新通知、同轮不重复。测试 notifier 仍为替身。
+- 使用 A 最新 1a3d9ed 工作区已有 jar，SHA256 `c3a0777cb8acfd8cf587bc08b893b75a849080749a5b2dadfb9773248bb4edaf`；独立临时库/随机loopback端口、worker关闭、无外部key。测试后设备paused，临时Java/PG已清理。未改A/E文件，未启动Pensieve、录屏或真实系统通知。
+- 提交后通知 E 集成最新 C；真实采集和系统通知可见性仍未验收。

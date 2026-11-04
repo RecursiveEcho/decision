@@ -43,9 +43,9 @@ def smoke(base, code, home, seed):
     store = Store(home)
     runner = Runner(config, store, problem, api=api, source=object(), notifier=lambda *a: None)
     now = datetime.now(timezone.utc)
-    def item(ident, text):
+    def item(ident, text, app="SyntheticApp"):
         return observation({'id': ident, 'file_created_at': now.isoformat(),
-            'metadata_entries': [{'key': 'ocr_result', 'value': json.dumps([{'rec_txt': text}])}]},
+            'metadata_entries': [{'key': 'ocr_result', 'value': json.dumps([{'rec_txt': text}])}, {'key': 'active_app', 'value': app}]},
             config, problem, now, now)
     sample = item(1, '合成页面，没有真实个人信息。')
     body = {'deviceId': device, 'items': [sample]}
@@ -99,8 +99,11 @@ def smoke(base, code, home, seed):
             runner.flush()
             batches += 1
         assert batches > 1
+        store.enqueue(item(200, '中'+'😀'*12000, '😀'*150))
+        runner.flush()
+        assert store.pending(problem) is None
         runner.deliver()  # Empty query before explicit synthetic fixtures.
-        failed_id = seed(problem, device)
+        failed_id, snooze_discussion = seed(problem, device)
         notified = []
         def synthetic_notifier(title, reason):
             notified.append(title)
@@ -117,6 +120,16 @@ def smoke(base, code, home, seed):
         assert len(pending_deliveries) == 1
         assert pending_deliveries[0]['delivery']['id'] == failed_id
         assert pending_deliveries[0]['delivery']['status'] == 'failed'
+        owner.request('PATCH', '/discussions/' + snooze_discussion, {'status': 'snoozed',
+            'snoozeUntil': (datetime.now(timezone.utc)+timedelta(seconds=2)).isoformat()})
+        runner.deliver()
+        assert len(notified) == 21
+        time.sleep(2.1)
+        runner.deliver()
+        assert len(notified) == 22, 'Snoozed delivery was not displayed again'
+        assert len(api.request('GET', '/devices/' + device + '/deliveries?limit=30')['items']) == 1
+        runner.deliver()
+        assert len(notified) == 22, 'Same snooze generation displayed twice'
         other = owner.request('POST', '/devices', {'name': 'synthetic-other-device'})
         try:
             Http(base, other['deviceToken']).request('POST', '/deliveries/' + failed_id + '/ack', {'status': 'sent'})
@@ -129,7 +142,7 @@ def smoke(base, code, home, seed):
             'checks': ['paused-rejection','device-owner-scope-denied','heartbeat','upload',
                 'external-id-dedup','locator-roundtrip','bad-hash-rejection',
                 'pause-race-known-rejection-resume','large-chinese-batch-splitting',
-                'delivery-pagination-21-fixtures','failed-notification-backoff','cross-device-ack-denied','final-paused'],
+                'emoji-utf16-limits','snooze-redelivery-new-generation','delivery-pagination-21-fixtures','failed-notification-backoff','cross-device-ack-denied','final-paused'],
             'largeTextBatches': batches, 'capture': 'not-started',
             'modelWikiSystemNotification': 'not-executed', 'notificationAdapter': 'synthetic-notifier'}, ensure_ascii=False))
     finally:
@@ -182,10 +195,12 @@ def main():
                     # Only this disposable test DB. Fixture insertion is not model generation evidence.
                     records = []
                     first = None
+                    snooze_discussion = None
                     for i in range(21):
                         timestamp = (datetime.now(timezone.utc) + timedelta(seconds=i)).isoformat()
                         discussion, delivery = str(uuid.uuid4()), str(uuid.uuid4())
                         if first is None: first = delivery
+                        if i == 1: snooze_discussion = discussion
                         records.extend([
                             ('discussion', {'id': discussion, 'problemId': problem,
                                 'title': 'synthetic-failure' if i == 0 else 'synthetic-success-' + str(i),
@@ -199,7 +214,7 @@ def main():
                         for kind, data in records)
                     run('docker','exec','-i',name,'psql','-v','ON_ERROR_STOP=1','-U','decision_test',
                         '-d','decision_backend_test', input=sql)
-                    return first
+                    return first, snooze_discussion
                 smoke(base,env['APP_OWNER_ACCESS_CODE'],Path(tmp)/'observer',seed)
         finally:
             if process and process.poll() is None:
