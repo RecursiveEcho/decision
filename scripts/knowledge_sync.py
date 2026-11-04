@@ -276,6 +276,7 @@ def apply_snapshot(snapshot, vault):
     vault = safe_path(vault)
     plan = render(snapshot)
     manifest_path = safe_path(vault / MANIFEST)
+    first_sync = not manifest_path.exists()
     previous = read_json(manifest_path, {'owner': MARKER, 'files': {}})
     if previous.get('owner') != MARKER or not isinstance(previous.get('files'), dict):
         raise SyncError('目录不属于本同步程序，未修改。')
@@ -329,6 +330,8 @@ def apply_snapshot(snapshot, vault):
         atomic_write(manifest_path, json_bytes({'owner': MARKER, 'files': hashes, 'updatedAt': now()}))
     if journal_path.exists():
         journal_path.unlink()
+    if first_sync:
+        initialize_view(vault)
     return {'entries': len(snapshot['entries']), 'domains': len(snapshot.get('domains', [])),
             'files': len(plan), 'changedFiles': changed}
 
@@ -338,6 +341,28 @@ def verify_unchanged(path, expected):
     actual = digest(path.read_bytes()) if path.is_file() else None
     if actual != expected or (path.exists() and not path.is_file()):
         raise SyncError('同步期间检测到本机修改，已停止覆盖；请先保留手写内容。')
+
+
+def initialize_view(vault):
+    """Only bootstrap a brand-new vault; never overwrite an existing user's Obsidian settings."""
+    config = safe_path(vault / '.obsidian')
+    if config.exists():
+        return
+    config.mkdir(mode=0o700)
+    atomic_write(config / 'graph.json', json_bytes({
+        'collapse-filter': False, 'search': '-path:历史/ -path:出处/',
+        'showTags': False, 'showAttachments': False, 'hideUnresolved': True,
+        'showOrphans': True, 'collapse-color-groups': True,
+        'colorGroups': [
+            {'query': 'path:领域/', 'color': {'a': 1, 'rgb': 5123802}},
+            {'query': 'path:知识/', 'color': {'a': 1, 'rgb': 3777897}},
+        ],
+        'collapse-display': True, 'showArrow': False,
+        'textFadeMultiplier': 0, 'nodeSizeMultiplier': 1.2,
+        'lineSizeMultiplier': 1, 'collapse-forces': True,
+        'centerStrength': 0.5, 'repelStrength': 15,
+        'linkStrength': 1, 'linkDistance': 250,
+    }))
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

@@ -37,6 +37,11 @@ class MirrorTest(unittest.TestCase):
         result = sync.sync_snapshot({'version': 1, 'entries': [], 'domains': []}, self.vault)
         self.assertEqual(0, result['entries'])
         self.assertIn('知识库还是空的', (self.vault / '知识总览.md').read_text())
+        config = self.vault / '.obsidian/graph.json'
+        self.assertIn('-path:历史/', json.loads(config.read_text())['search'])
+        config.write_text('{"userChoice":true}')
+        sync.sync_snapshot({'version': 1, 'entries': [], 'domains': []}, self.vault)
+        self.assertEqual({'userChoice': True}, json.loads(config.read_text()))
 
     def test_links_domains_provenance_and_no_unnecessary_rewrite(self):
         data = fixture()
