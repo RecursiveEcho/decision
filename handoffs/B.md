@@ -264,3 +264,9 @@ E统一部署A 0fb6964+8018650与B55688e2后通知ready；独立只读子Agent�
 E提供两组定点只读回看：off纯图=2消息1附件；low PDF/DOCX=2消息2附件，PDF两页已处理两页及DOCX未读取范围notice真实显示，Markdown表格可读。E已说明文档首次MODEL_EMPTY、明确retry成功，本轮回读未新增user/附件。B不将回读冒充自己执行文档真实调用；自动记忆/决定真实隔离测试由E负责，本人profile不写测试记忆。
 
 实际Job/消息ID、附件元数据、答复及读回结果保存在本机忽略文件web/output/playwright/media-real-evidence.json；真实截图media-real-answer-desktop/mobile.png、media-real-preview-desktop/mobile.png、media-e-0/1-desktop.png、media-e-documents-mobile.png，不提交公开库。脚本对未约定GET问题详情误请求得到500，已改为现有列表定位；历史“新对话”与新建按钮重名导致脚本选择器歧义，已限定历史区域后通过，均不是用户UI重发。当前无pending/running，等E最后重启ready后仅定点GET回读并清理自有会话，用户窗口未动。
+
+### 最终重启验收与清理（2026-11-04）
+
+E部署A50d5a3a并通知最终ready后，B仅GET定点回读三组合成问题：全部仍各1user/1assistant，消息含附件元数据与重启前JSON完全一致；两张图片认证Blob预览均实际加载1000x640，文档两附件正常显示，pending=null、读回写请求0、重载以来控制台/pageerror均0。PDF/DOCX认证GET均200，二进制大小与metadata一致且Cache-Control:no-store。
+
+随后退出自有decision-b-media-real会话，确认session/chat均null、当前owner IDB条目0、DOM Blob引用0，清Cookie及page/context路由、恢复viewport=null并关闭窗口。此前B独立Vite已停；用户旧窗口与IAB8088全程未动。完整定点回读和清理结果追加在本机忽略media-real-evidence.json的finalRestartReadback/finalCleanup。本轮B实现、测试、真实图片调用、生产回读、推送和清理全部收拢，不再追加模型调用。自动记忆/决定的隔离真实语义验收由E记录，不以B替身展示或本轮图片验收替代。
