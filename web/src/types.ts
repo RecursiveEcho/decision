@@ -48,6 +48,7 @@ export interface Attachment {
 }
 export interface Source {
   id: string;
+  problemId: string;
   title: string;
   text: string;
   kind: string;
@@ -70,6 +71,7 @@ export interface Memory {
 }
 export interface Topic {
   id: string;
+  problemId: string;
   title: string;
   markdown: string;
   syncStatus: string;

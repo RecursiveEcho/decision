@@ -270,3 +270,11 @@ E提供两组定点只读回看：off纯图=2消息1附件；low PDF/DOCX=2消�
 E部署A50d5a3a并通知最终ready后，B仅GET定点回读三组合成问题：全部仍各1user/1assistant，消息含附件元数据与重启前JSON完全一致；两张图片认证Blob预览均实际加载1000x640，文档两附件正常显示，pending=null、读回写请求0、重载以来控制台/pageerror均0。PDF/DOCX认证GET均200，二进制大小与metadata一致且Cache-Control:no-store。
 
 随后退出自有decision-b-media-real会话，确认session/chat均null、当前owner IDB条目0、DOM Blob引用0，清Cookie及page/context路由、恢复viewport=null并关闭窗口。此前B独立Vite已停；用户旧窗口与IAB8088全程未动。完整定点回读和清理结果追加在本机忽略media-real-evidence.json的finalRestartReadback/finalCleanup。本轮B实现、测试、真实图片调用、生产回读、推送和清理全部收拢，不再追加模型调用。自动记忆/决定的隔离真实语义验收由E记录，不以B替身展示或本轮图片验收替代。
+
+## 资料全局入口与记忆提炼（2026-11-05开始，进行中）
+
+用户经E要求资料工具在新对话可达、记忆页真正提炼最多5重点，Wiki写作流程本轮不讨论。B独立只读子Agent先审范围，确认资料入口的newProblem禁用与load早退为直接根因。
+
+已修资料入口：新对话资料页请求全局/sources、/topics，不带保留的旧selected ID；明确全部资料，总览无添加/重分析/同步写入口，对提交函数另加有效上下文保护。每条资料/主题用自身problemId打开原对话，沿用pending禁切；已有对话查询仍保留problemId。补全共享实体已有的Source/Topic.problemId前端类型，不改公共契约。
+
+构建和36测试通过。独立5173合成浏览器验证桌面/56px侧栏/390工具可达，全局GET无旧ID、0表单/0重分析、两个原对话入口正确，局部请求problemId正确。新对话文字+TXT附件+max档经工具往返/打开原对话再新对话/手机往返全部不丢，整页无横向溢出，业务写0。截图knowledge-overview-desktop/rail/mobile.png仅本机忽略目录，不计真实后端验收；用户窗口未动。记忆提炼等待E/A正式投影字段，不用slice或省略号冒充摘要，后续继续本角色开发。
