@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component;
 /** Owner-reviewed knowledge. Proposals never change the old automatic Topic/Wiki pipeline. */
 @Component
 class Knowledge {
-  static final String VERSION = "reviewed-knowledge-v2";
+  static final String VERSION = "reviewed-knowledge-v3";
   static final String NOTICE = "仅整理当前有效对话文字和正式资料，并对照有限的已确认知识；不直接读取或导出附件原件。助手发言是讨论记录，不是外部事实证明。";
   final Store s;
   final Config c;

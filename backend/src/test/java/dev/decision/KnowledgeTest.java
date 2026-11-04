@@ -275,6 +275,9 @@ class KnowledgeTest {
       assertTrue(systemPrompt.contains("不能推出该场景不采用B，也不能推出其他场景不得采用A"));
       assertTrue(systemPrompt.contains("保留仍成立的已确认条件和未知"));
       assertTrue(systemPrompt.contains("新的推理必须在相应正文处标为建议或待确认"));
+      assertTrue(systemPrompt.contains("markdown是本人确认后长期保存的知识正文"));
+      assertTrue(systemPrompt.contains("流程状态仅放reason或由界面展示"));
+      assertTrue(systemPrompt.contains("必须在正文保留这些实质未知"));
       assertTrue(
           gateway.input.path("knowledge").get(0).path("markdown").asText().contains("写入需考虑幂等"),
           "Prior confirmed conditions must reach the model along with the new discussion");
