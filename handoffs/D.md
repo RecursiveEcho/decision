@@ -2,7 +2,7 @@
 
 交接编号：DECISION-MVP-20261104。角色由用户明确纠正为 D；只修改 `miniprogram/` 与本回执。工作区 `decision-worktrees/miniprogram`，分支 `feat/mvp-miniprogram`，共同基线 `2fcea57`。
 
-状态：源码与自动自检完成，源码提交 `384c7a2`、真实联调入口提交 `fd6bda6` 均已推送 `origin/feat/mvp-miniprogram`；真实 API 联调现已通过（18:56 补充见下）；工具导入和真机仍未验证。开始：2026-11-04 17:28 Asia/Shanghai；本阶段自检完成：2026-11-04 17:38 Asia/Shanghai。独立只读审查通过；完成后再次只读审查，已修复 404 Job 锁住后续提交的问题并增加回归测试。
+状态：源码与自动自检完成，源码提交 `384c7a2`、真实联调入口提交 `fd6bda6` 均已推送 `origin/feat/mvp-miniprogram`；真实 API 联调现已通过（18:56 补充见下）；真实工具导入和登录页渲染现已验证（19:15 后补充见下）；完整微信交互与真机仍待验。开始：2026-11-04 17:28 Asia/Shanghai；本阶段自检完成：2026-11-04 17:38 Asia/Shanghai。独立只读审查通过；完成后再次只读审查，已修复 404 Job 锁住后续提交的问题并增加回归测试。
 
 | 功能 | 开始 | 状态/实现位置 | 验证与遗留 |
 |---|---|---|---|
@@ -10,12 +10,12 @@
 | 问题选择与创建 | 17:29 | 完成 `pages/problems/` | 18:56 真实创建、游标/去重通过；微信界面与跨端互见待验 |
 | 聊天、资料与 Job | 17:30 | 完成 `pages/workspace/` | 18:56 真实摄取/聊天 Job 与 5 条引用核对通过；纯 URL 抓取及微信生命周期待验 |
 | 议题、来源与决定复盘 | 17:31 | 完成 `pages/workspace/`、`pages/source/` | 18:56 真实来源、议题、决定取消/确认与复盘通过；实际弹窗、复制与真机待验 |
-| 导入包与接入说明 | 17:35 | 完成 `scripts/prepare-import.js`、`README.md` | 无 AppID 不生成导入副本；拿到本人真实 AppID 后生成忽略目录 `.local/wechat-project/` |
+| 导入包与接入说明 | 17:35 | 完成 `scripts/prepare-import.js`、`README.md` | 现已用本人 AppID 生成忽略目录 `.local/wechat-project/` 并成功打开；AppID 不提交 |
 
 ## 四层证据
 
 1. **源码**：`npm ci` 成功，无运行时依赖；`npm test` 13/13；`npm run check` 通过 JS 语法、JSON、页面注册、WXML 标签配对、事件处理函数和默认域名校验；`git diff --check` 通过。测试使用明确 wx/network 替身，不算实际服务。WXML 静态检查不能替代微信编译。
-2. **微信工具导入**：未执行。在 `/Applications`、用户 Applications 与 `com.tencent.wechat.devtools` Spotlight 检索未找到开发者工具；微信客户端不当作开发者工具。没有冒用/伪造 AppID，没有关闭域名安全校验。
+2. **微信工具导入**：现已成功，工具 2.02.2609240 Stable，基础库 3.17.5；见本轮补充。以下为早期记录：当时未执行。在 `/Applications`、用户 Applications 与 `com.tencent.wechat.devtools` Spotlight 检索未找到开发者工具；微信客户端不当作开发者工具。没有冒用/伪造 AppID，没有关闭域名安全校验。
 3. **真实 API**：当前已通过 D 请求层与页面逻辑联调，见 18:56 补充；以下保留早期事实。17:38 总控提供本机 `http://127.0.0.1:8080` 入口后，GET `/api/v1/health` 连接失败（curl exit 7 / HTTP 000）；未进入登录或业务联调。此前 A 回执为开发中；未读取、打印或提交本机凭据。客户端默认只请求真实 API，不静默 fallback mock。源码支持 mock 响应的醒目标识。
 4. **真机**：未执行。需要本人 AppID、微信开发者工具、E 提供可达 HTTPS 服务及相应合法域名/证书/平台条件；具体接入步骤见 `miniprogram/README.md`。
 
@@ -96,3 +96,17 @@
 | 残余问题与用户试用 | 阻塞项、责任角色、下一步；本人反馈单列，不代填通过 |
 
 截图、原始日志及含敏感配置的工具信息只留本机忽略目录；公开回执写脱敏结论与本机证据路径，不上传访问码、token、真实文章/对话。AppID/工具未就绪期间，D 保持已交付范围，不继续为等待而重复调用真实模型。
+
+## 真实开发者工具导入与编译（2026-11-04 19:10–19:20 Asia/Shanghai）
+
+- 用户确认 AppID 已取得、工具已安装登录，并明确授权导入验收；独立只读审查通过。AppID 仅用于本机忽略的 `miniprogram/.local/wechat-project/project.config.json`，未写入受版本控制文件。
+- `npm ci`、13 项单测、静态检查本轮重跑通过。导入副本 18 个源码文件与正式 D 源码逐字节一致，验收操作后再比对仍一致，未改业务逻辑。
+- **实际导入成功**：官方 CLI `open --project .../.local/wechat-project` 返回成功，随后真实 UI 显示 `decision-mvp` 项目、源码树与 `pages/login/login`。工具版本 `2.02.2609240 Stable`；运行控制台报告基础库 `3.17.5`。不是 Node wx 适配器截图。
+- **实际编译证据**：工具安装包自带 `wcc` 对 login/problems/workspace/source 四个 WXML 文件编译 exit 0，`wcsc -lc` 对 app.wxss 编译 exit 0；产物仅留 `.local/wxml-compiled.js`、`.local/wxss-compiled.css`。IDE 中登录页正常渲染，能看到服务地址、访问码、登录按钮与说明。其余三页模板编译通过，但没有进入登录后页面完成真实交互，不混写为“四页运行验收通过”。
+- **运行提示**：真实控制台出现两条基础库 preload warning、一条渲染层 `DOMNodeRemoved` 事件移除提示。登录页仍可渲染，当前没有证据证明属于 D 业务异常，也未确证根因或保证其他交互不受影响；后续交互复验保留此项观察。代码质量提示未启用按需注入，未作为编译失败处理。
+- **UI 自动化局限**：本次电脑控制接口多次出现 timeout/noWindowsAvailable，随后恢复可读窗口；部分输入/模式切换动作未能确认执行成功。因此不记登录输入、真实提交、弹窗、复制或网络失败显示已通过；没有取得本轮实际 `wx.request` 域名拒绝日志。已有 Node 真实 HTTP 证据仍保留其原边界。
+- **网络前置条件已向 E 实时核实**：E 当前仍仅交付本机 HTTP，未部署/验证公网 HTTPS 或该 AppID 的 request 合法域名。项目 `urlCheck: true` 保持开启，未关闭校验。登录后微信真实链路与真机待 E 提供合规可达入口后继续，不能继续用“AppID/工具未准备”描述当前阻塞。
+- **临时 CLI 权限已收回**：因 UI 超时、CLI 初始服务端口关闭，用户明确同意临时开启并手动启用。导入使用 loopback 服务端口；收尾通过工具安全设置关闭。UI 显示“工具的服务端口已关闭”，随后 CLI `islogin` 再次明确报 service port disabled。没有开启登录票据获取、自动信任项目或多端插件服务端口。
+- 工具界面出现预览二维码，不等于真机测试或小程序发布成功。本轮未执行发布/审核操作；没有启动采集、改 TGA 或购买/部署服务。本机副本和编译产物均被 Git 忽略。
+
+**交给 E 的下一步**：先明确实际 HTTPS 服务入口及该 AppID 的合法域名配置，再由 D 使用本机已导入项目验收真实登录、同账号问题互见、来源/讨论/决定复盘与生命周期；真机继续单独记证据。工具已安装/登录、AppID 已取得、项目导入/模板编译成功这几项可从旧阻塞中移除；完整 D 微信运行时与本人试用仍未通过。
