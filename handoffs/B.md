@@ -250,3 +250,7 @@ E已审191ba07并合入，尚未更新8088，等待A后端统一部署。E目视
 ### 22:06 末轮只读复审
 
 独立审查确认附件缺失退出等待、按引用回收、旧401 owner保护三项已修。全局记忆页包含其他问题的局部记忆，因此范围用“仅用于原对话”，不错误声称“本次对话”；旧inferred/observed保留必要“推断，未由你确认/观察所得”提示，普通本人事实不暴露kind/版本。自有替身浏览器已退出，清session/chat/当前owner IDB、Cookie及路由，恢复viewport=null并关闭；用户窗口未动。真实联调待E统一部署ready通知。
+
+### 纠正记忆出处兼容（2026-11-04）
+
+按E/A定版，手动纠正自动记忆正文后origin=manual，清sourceMessageId/sourceQuote，保留scope，以新user_statement evidence承载编辑文本；仅忘记则保留出处。独立只读审查通过：Memory.origin补充manual枚举；记忆页与聊天记录均读取最新sourceQuote且仅存在时显示，不杜撰原话，Decision.origin不扩展。本次只有类型补丁，无新增行为；构建验证后推送。

@@ -64,7 +64,7 @@ export interface Memory {
   evidence: Evidence[];
   problemId?: string;
   scope?: "global" | "problem";
-  origin?: "chat";
+  origin?: "chat" | "manual";
   sourceMessageId?: string;
   sourceQuote?: string;
 }
