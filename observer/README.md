@@ -1,0 +1,60 @@
+# C：本地观察与桌面通知适配器
+
+Python 3.11+，运行时仅标准库。当前实现对接 Pensieve 0.37.0 的已核实 HTTP 格式；**尚未实测真实 Pensieve、业务后端或系统通知送达**。不安装 Pensieve、不启动录屏、不设置开机自启。采集和同步是两个独立状态。
+
+## 安装与自检
+
+在本模块目录执行：
+
+```sh
+uv sync --python 3.12 --frozen
+uv run python -m unittest discover -s tests -v
+uv run python -m decision_observer status
+```
+
+也可在 Python 3.11+ 环境直接 `python -m decision_observer status`。系统自带 Python 3.9 不满足本模块声明。测试只有虚构文字、替身 API 和临时本地 HTTP 服务；不会访问真实历史或弹通知。
+
+## 配对与启动（由本人操作）
+
+1. 在网页登录后按共享契约 `POST /api/v1/devices` 注册，获取一次性 `deviceToken` 与 `device.id`。这是设备 token，不能填写 owner token 或模型 key。C 不保存所有者 code。
+2. 在 Pensieve 页面选择专用截图 library/folder，记录数字 ID；仅在本人允许的无敏感页面开启录屏。参阅 [版本核验](PENSIEVE_AUDIT.md)。不要为获取 ID 运行全历史导出。
+3. 运行 `uv run python -m decision_observer configure`，交互填写 `http://127.0.0.1:8080/api/v1` 等配置，token 隐藏输入。远端后端必须 HTTPS，Pensieve 仅允许 loopback；拒绝 HTTP 重定向；不继承系统代理。
+4. 在网页选定问题、明确将设备切换到 running；然后本机明确执行：
+
+```sh
+uv run python -m decision_observer run --problem-id <问题UUID>
+```
+
+两步缺一都不能读取/上传观察。run 前的数据不会补采。`run` **不会启动 Pensieve 本身**。运行中上传当前选定问题的 OCR 文字及数字 entity/library 定位符，不上传图片、文件路径、窗口标题或其他元数据。原文最多 20000 字符，明确截断；OCR 未完成会在近期窗口重读。
+
+另一终端暂停，或在运行终端 Ctrl-C：
+
+```sh
+uv run python -m decision_observer pause
+uv run python -m decision_observer status
+# stop 与 pause 同义
+```
+
+暂停/断线/远端 paused 清除本地同意，连接恢复也不自动重启。网络操作每次超时 2 秒，逐轮检查心跳，并在上传前重新确认远端状态；单个已发出的 HTTP 请求无法撤回，服务端必须按契约在 paused 时拒绝新数据。运行循环没有后台自启或重连自动授权。
+
+**暂停适配器只停同步，不保证 Pensieve 底层录屏停止。** 本人必须单独停止 Pensieve 并确认录屏进程状态；CLI 始终标记底层采集为 unverified。没有实现录屏进程控制，不宣称全局停止观察。
+
+## 队列与通知
+
+默认本机 `~/.decision-observer/`（目录 0700，配置/数据库 0600）。可用全局 `--home` 指向其他私有目录。SQLite 保存最多 50 条已同意的待上传文字、每条稳定幂等 UUID 和最多 10000 个已接收 externalId。成功即删队列正文；SQLite 旧页/备份不承诺安全擦除。暂停后不续传，下一次普通 run 清空待发队列；明确运行 `run --problem-id <原问题UUID> --resume-queue` 才重试旧队列。不同问题不允许混传。队列满、接口错误或格式不匹配会暂停并要求再次本地启动。
+
+单次查看最近 400 个实体以等待延迟 OCR。已处理窗口可以继续推进；未处理数据超过窗口或待 OCR 实体跌出窗口时明确暂停，不悄悄漏数据。已接收 ID 是持久化去重游标；连续相同文字以问题+contentHash 抑制重复。先批量排空已授权队列再读新数据，每批最多 50 条，未处理数据下一轮继续。尚未实现超大积压的历史分页；恢复采用新授权时段，不补采暂停期间数据。
+
+通知独立运行，不需要开启屏幕同步：
+
+```sh
+uv run python -m decision_observer notifications
+# 只检查一次
+uv run python -m decision_observer notifications --once
+```
+
+每 5 秒取一条待发通知，macOS `osascript display notification` 接受后回执 sent，失败回执 failed。断线退出，明确重启；已有 sent 本地回执可重试而不重复弹出（操作系统调用成功但本地落盘前崩溃仍可能重复，非 exactly-once）。sent 不代表用户看到；需手动核验通知权限/专注模式。首版不支持点击通知跳转，回网页按同标题查议题。Ctrl-C 退出通知轮询；观察 pause 不关闭独立通知轮询。
+
+## 当前验收边界
+
+已验证：25 项合成/本机 HTTP 测试、Python wheel/sdist 构建、默认暂停状态。未验证：真实中文 OCR、真实后端 device/token/幂等拒绝、Pensieve 底层启停、真实系统通知到达及用户看到、实际资源占用。没有读取个人历史，没有实际观察或通知验收结论。
