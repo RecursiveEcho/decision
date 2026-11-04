@@ -1,0 +1,8 @@
+{
+  "description": "个人 AI 决策系统：原生微信小程序",
+  "miniprogramRoot": "./",
+  "compileType": "miniprogram",
+  "projectname": "decision-mvp",
+  "setting": {"es6": true, "urlCheck": true, "minified": true},
+  "packOptions": {"ignore": [{"type": "folder", "value": "tests"}, {"type": "folder", "value": "scripts"}, {"type": "folder", "value": ".local"}, {"type": "file", "value": "README.md"}]}
+}
