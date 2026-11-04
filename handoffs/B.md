@@ -228,3 +228,13 @@ E已亲自看新版桌面空态/历史/折叠/390历史/抽屉，整体视觉通
 E部署cddb75f并确认根npm ci/28测试/build及资源逐字节匹配后，B完成唯一一轮8088只读检查：实际index-DuoSLn3Y.js；空态1输入/0旧消息；真实合成历史Markdown标题正常、折叠rail宽56px；资料与主题工具页可达并返回讨论；390抽屉切历史正常，长正文与展开依据底637.6px、dock顶657.5px且无横向溢出。全程业务写请求0，未调用模型。最终截图final-production-empty-desktop.png、final-production-empty-mobile.png、final-production-drawer-mobile.png、final-production-history-mobile.png与redesign-production-evidence.json仅留本机忽略目录。
 
 已退出并清除自有开发/生产会话和草稿、Cookie、page/context routes，body锁滚清除、viewportSize=null，关闭decision-b-redesign；参考浏览器decision-b-designref和临时替身标签此前已清理关闭，B独立5173 Vite预览进程已停止。用户旧window与IAB8088未操作。B本轮全部实现、自检、推送和回执收拢，不再追加模型或旧流程重复验证。
+
+## 去除多余操作、附件与自动记录（2026-11-04 21:28开始，进行中）
+
+用户要求移除议题、手填决定、服务与观察入口，能由助手完成的整理不交回用户。E随后同步图片/常见文件附件、四档思考、紧凑证据与自动记忆/明确决定正式契约。独立只读子Agent先审范围、附件持久化方案及实现；仅修改B目录，不删服务端历史、不改变观察状态。
+
+当前实现：侧栏仅讨论/资料与主题/记忆；无手填记忆和决定表。聊天使用服务端Message.memoryChanges/decisionRecord已保存字段，折叠展示原话和最新记忆/决定状态；记忆页查看全部，支持纠正、忘记、删除。来源按sourceId合并为紧凑行、两行摘录，抽屉保留引用全文/来源；不确定性按条折叠。
+
+附件支持选取/粘贴/拖入PNG/JPEG/WebP和PDF/DOCX/XLSX/TXT/MD/CSV；图片归一化PNG/JPEG及尺寸限制，4个/单个8MiB/合计16MiB。文件仅显式发送时POST；原件与不可变发送快照放会话隔离IDB，sessionStorage只含metadata/key。档位off/low/high/max随每次发送冻结，刷新未知结果重用原bytes/key，202后只查询Job，失败重试复用后端附件。认证Blob预览/下载，不使用token URL；部分解析notice可见，退出/换消息回收URL；移除/成功后回收本机原件/快照。快照缺失不降级纯文本，允许明确停止本地等待并查历史，不自动新key重发。修复旧附件401晚到误注销新登录。
+
+截至21:56，构建与36项测试通过（原28 + 8项IDB/附件恢复、配额失败不POST、冲突恢复、会话隔离、过期响应、格式容量限制）。测试使用fake-indexeddb和合成响应，不算真实附件模型/自动记忆/决定验收。桌面/390有内容截图与真实后端联调待后续证据；尚未操作用户旧窗口/IAB8088。此提交先供E集成，未部署、不宣称完成全部验收。
