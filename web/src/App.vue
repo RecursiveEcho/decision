@@ -66,9 +66,19 @@ const reviewDraft = ref<
 const newProblemForm = ref<HTMLFormElement | null>(null);
 const newProblemTitle = ref<HTMLInputElement | null>(null);
 const errorBanner = ref<HTMLDivElement | null>(null);
+const displayedProblem = computed({
+  get: () => (newProblem.value ? "" : selected.value),
+  set: (id: string) => {
+    newProblem.value = false;
+    selected.value = id;
+  },
+});
 async function openNewProblem() {
   if (busy.value) return;
   newProblem.value = true;
+  sourceDetail.value = null;
+  error.value = "";
+  note.value = "";
   await nextTick();
   newProblemForm.value?.scrollIntoView({ block: "start", behavior: "auto" });
   newProblemTitle.value?.focus({ preventScroll: true });
@@ -130,6 +140,11 @@ function ended() {
   logged.value = false;
   problems.value = [];
   selected.value = "";
+  newProblem.value = false;
+  title.value = "";
+  goal.value = "";
+  constraints.value = "";
+  unknowns.value = "";
   clearData();
   devices.value = [];
   status.value = null;
@@ -427,8 +442,10 @@ onUnmounted(() => {
     <aside>
       <div class="brand">知衡 <span>个人决策工作台</span></div>
       <label
-        >当前问题<select v-model="selected" :disabled="busy">
-          <option value="" disabled>选择一个问题</option>
+        >当前问题<select v-model="displayedProblem" :disabled="busy">
+          <option value="" disabled>
+            {{ newProblem ? "新建问题（待创建）" : "选择一个问题" }}
+          </option>
           <option v-for="p in problems" :key="p.id" :value="p.id">
             {{ p.title }}
           </option>
@@ -446,9 +463,12 @@ onUnmounted(() => {
         <button
           v-for="item in tabs"
           :key="item"
-          :class="{ active: tab === item }"
+          :class="{ active: !newProblem && tab === item }"
           :disabled="busy"
-          @click="tab = item"
+          @click="
+            newProblem = false;
+            tab = item;
+          "
         >
           {{ item }}
         </button>
@@ -459,9 +479,13 @@ onUnmounted(() => {
     <main>
       <header>
         <div>
-          <small>个人空间 / {{ tab }}</small>
-          <h1>{{ problem?.title || "从一个真实问题开始" }}</h1>
-          <p v-if="problem">{{ problem.goal }}</p>
+          <small>个人空间 / {{ newProblem ? "新建问题" : tab }}</small>
+          <h1>
+            {{
+              newProblem ? "新建问题" : problem?.title || "从一个真实问题开始"
+            }}
+          </h1>
+          <p v-if="!newProblem && problem">{{ problem.goal }}</p>
         </div>
         <button class="secondary" :disabled="busy" @click="act(refresh)">
           刷新
@@ -471,7 +495,7 @@ onUnmounted(() => {
         {{ error }}
       </div>
       <div v-if="note" role="status" class="notice">{{ note }}</div>
-      <div v-if="mock" class="error">
+      <div v-if="mock && !newProblem" class="error">
         当前包含测试替身（mock）结果，不代表真实模型验证。
       </div>
       <div v-if="busy" role="status" class="muted">正在处理…</div>
@@ -505,7 +529,7 @@ onUnmounted(() => {
           取消
         </button>
       </form>
-      <div v-if="!selected && tab !== '服务与观察'" class="empty">
+      <div v-else-if="!selected && tab !== '服务与观察'" class="empty">
         <h2>你正在考虑什么？</h2>
         <p>新建问题，写下目标和还不确定的地方。</p>
       </div>

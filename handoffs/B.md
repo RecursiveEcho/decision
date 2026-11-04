@@ -105,3 +105,9 @@ E部署90283a3后，B使用独立生产测试页验证1280px深滚动、390px窄
 用户截图的左侧390px窄条来自B遗留的Playwright移动视口，不是网页CSS故障。独立只读审查确认：仅B所属decision-b-final单tab受影响，outerWidth1800而innerWidth390。普通新增CDP会话清除未生效；最终通过原主frame会话清除Emulation metrics，并移除该测试上下文的viewport/emulatedSize缓存，page.viewportSize()为null。没有固定为另一宽度、没有关闭页面或改动登录/业务数据。
 
 恢复后inner/client/visualViewport宽度均1200，main960，mobile媒体查询false；桌面导航和主区域截图目视正常。截图留在本机忽略目录web/output/playwright/restored-native-desktop-synthetic.png，不提交。page/context路由拦截均0；真实只读GET /api/v1/status返回200，model configured=true、lastCallStatus=succeeded、Wiki status=synced。未新增模型调用，不将状态读取充作新一轮模型/Wiki正文验收。已告知E可继续用户试用。
+
+## 新建草稿身份修复（2026-11-04 19:21开始，19:25自检完成）
+
+用户指出新建表单展开后，侧栏仍显示旧问题。独立只读审查确认：旧逻辑只展开表单，当前问题选择、主标题和旧业务区域未区分草稿。App.vue现保留内部原选择，以computed显示选择令新建时显示“新建问题（待创建）”；主标题同步中性显示，旧目标与业务区域隐藏。取消恢复原选择，选择已有问题/导航退出草稿；成功选新ID，失败保留草稿；退出登录清空新建字段。共享接口不变。
+
+构建和8项API测试通过。全新decision-b-draft独立窗口的明确契约替身验证：1280/390宽度的新建中性身份、隐藏旧内容、取消恢复、重复点击保留输入；500失败保留输入、201成功切换新ID、切回已有问题退出表单、退出登录清空草稿均通过。测试替身不计真实API/模型证据。待E部署8088后做本轮真实页面复验，未操作用户接管的decision-b-final窗口。
