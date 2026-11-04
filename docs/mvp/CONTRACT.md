@@ -144,6 +144,7 @@ A 至少建立 problems、sources、messages、jobs、memories（含 revision hi
 - 模型内部可选 `memoryActions:[{action:"ADD"|"UPDATE"|"DELETE"|"NONE",content?,scope?:"global"|"problem",targetId?,expectedRevision?,sourceQuote}]`，最多5项。服务端绑定当前 userMessageId；sourceQuote 必须为当前用户原始文本连续片段。只记本人实际陈述，排除假设、转述、第三人、引用、附件及助手生成的个人事实，kind 保持 user_reported。
 - UPDATE/DELETE 只可针对当前检索提供的自动记忆 ID 与 revision，不自动覆盖旧手填记录。以消息/action去重，保存墓碑与来源顺序；旧 Job/重试不能复活已忘记内容，只有后续用户重新明确陈述才能成为新版本。最终写入与回答保存同事务，自动记忆更新不 bump 全局对话 revision 或导致当前助手回答失效。
 - `Memory` 增加 `scope,origin:"chat",sourceMessageId,sourceQuote`，保留 id/content/status/revision/problemId。`GET /memories` 无 problemId 返回全部；指定 problemId 返回本问题与 global。`PATCH/DELETE /memories/{id}` 继续允许本人纠正/忘记，须防在途旧 Job 复活。
+- 本人 PATCH content 纠正自动记忆后，origin 改为 manual，清 sourceMessageId/sourceQuote，scope 保持，新本人陈述 evidence 承载编辑文本；旧出处留在历史，不能把新文字冒充旧消息原话。仅修改 status 则保留原出处。
 - 检索 active 本问题与 global：中文二元组、英文词做本地相关性排序，再考虑近期，相关项最多12，加少量稳定全局候选总计不超过16。是词法检索，不宣称向量语义召回。
 - 助手 `Message.memoryChanges?=[{action:"ADD"|"UPDATE"|"DELETE",memoryId,content,scope,revision}]` 仅包含实际写入成功项；无效候选不阻塞正常回复，不显示成功提示。前端只需小型可展开状态与出处；记忆页用于查看、纠正、忘记，不要求事先填写。
 - 模型内部可选 `decisionCandidate:{choice,quote,rationale?,expectedOutcome?,supersedesId?}`。quote 必须是当前用户原话连续片段，choice 是 quote 连续片段；只记录明确选择/承诺，不记录疑问、犹豫、假设、第三人或助手建议。未明确给出的理由和预期留空。

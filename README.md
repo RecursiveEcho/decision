@@ -2,7 +2,7 @@
 
 仅本人使用。目标是把对话、本人提供的资料和经授权的电脑观察，变成有来源、可纠正、可复盘的决策讨论。
 
-**第一版网页 MVP 已在本机运行；真实模型、Wiki、决定和复盘已有验证。最终检查与功能边界见 [总控回执](handoffs/E.md)。**
+**网页已在本机更新：直接聊天、图片/文档附件、四档思考、自动记忆与明确决定记录。真实图文、跨对话记忆、纠正/忘记和重启恢复已验证，详见 [本轮验收](docs/mvp/CONVERSATIONAL_ASSISTANT.md)。**
 
 本机打开 http://127.0.0.1:8088 ，访问码在忽略的 `.local/login.txt`。重启用 `python3 scripts/manage.py up`，停止用 `python3 scripts/manage.py stop`（数据保留）。另一台机器首次使用请按 [运行说明](deploy/README.md) 配置和构建。
 
