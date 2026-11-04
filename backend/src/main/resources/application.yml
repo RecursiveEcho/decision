@@ -1,0 +1,38 @@
+server:
+  port: ${APP_PORT:8080}
+  error:
+    include-message: never
+    include-stacktrace: never
+spring:
+  application:
+    name: decision-backend
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/decision}
+    username: ${DATABASE_USER:decision}
+    password: ${DATABASE_PASSWORD:}
+    hikari:
+      maximum-pool-size: 5
+      data-source-properties:
+        socketFactory: dev.decision.DirectSocketFactory
+  jackson:
+    deserialization:
+      fail-on-trailing-tokens: true
+  flyway:
+    enabled: true
+  main:
+    banner-mode: off
+logging:
+  level:
+    dev.decision: INFO
+app:
+  owner-code: ${APP_OWNER_ACCESS_CODE:}
+  token-secret: ${APP_TOKEN_SECRET:}
+  model-key: ${DEEPSEEK_API_KEY:}
+  model-base: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+  model-name: ${DEEPSEEK_MODEL:deepseek-flash}
+  mock: ${APP_MOCK_MODE:false}
+  wiki-base: ${WIKI_BASE_URL:}
+  wiki-token: ${WIKI_ACCESS_TOKEN:}
+  wiki-public-url: ${WIKI_PUBLIC_URL:}
+  wiki-locale: ${WIKI_LOCALE:zh}
+  worker-enabled: ${APP_WORKER_ENABLED:true}
