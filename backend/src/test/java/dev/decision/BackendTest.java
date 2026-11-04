@@ -38,6 +38,7 @@ class BackendTest {
   @Autowired Domain d;
   @Autowired Model model;
   @Autowired Wiki wiki;
+  @Autowired ChatMemory chatMemory;
   String owner;
 
   @BeforeEach
@@ -47,9 +48,10 @@ class BackendTest {
     assertTrue(url.endsWith("/decision_backend_test"), "Refuse to reset a non-test database");
     s.db.execute(
         "TRUNCATE"
-            + " jobs,records,record_history,idempotency_keys,analysis_pending,observation_keys,discussion_keys,model_calls,login_attempts"
+            + " jobs,records,record_history,idempotency_keys,analysis_pending,observation_keys,discussion_keys,model_calls,login_attempts,chat_memory_tombstones"
             + " CASCADE");
     s.db.update("UPDATE context_version SET revision=0");
+    s.db.update("UPDATE chat_memory_state SET epoch=0");
     c.mock = false;
     c.modelKey = "";
     c.modelBase = "https://api.deepseek.com";
@@ -165,6 +167,277 @@ class BackendTest {
         Json.arr(),
         "memories",
         Json.arr());
+  }
+
+  @Test
+  void chatMemoryUpdatesKeepCurrentReplyAndCrossProblemPreferenceWithoutGlobalBump()
+      throws Exception {
+    List<JsonNode> inputs = new ArrayList<>();
+    var target = new java.util.concurrent.atomic.AtomicReference<String>();
+    String old = "我喜欢长篇回答";
+    String correction = "我喜欢长篇回答这条记忆记错了，我现在喜欢简短回答";
+    var server =
+        modelServer(
+            request -> {
+              JsonNode input = Json.parse(request.path("messages").get(1).path("content").asText());
+              inputs.add(input);
+              ObjectNode answer =
+                  Json.obj(
+                      "content",
+                      inputs.size() == 1 ? "旧答代号：红石" : "当前新答第二点：先列一个可用例子。",
+                      "evidence",
+                      Json.arr(),
+                      "uncertainties",
+                      Json.arr());
+              if (inputs.size() == 1)
+                answer.set(
+                    "memoryActions",
+                    Json.arr()
+                        .add(
+                            Json.obj(
+                                "action",
+                                "ADD",
+                                "content",
+                                old,
+                                "scope",
+                                "global",
+                                "sourceQuote",
+                                old)));
+              if (inputs.size() == 2)
+                answer.set(
+                    "memoryActions",
+                    Json.arr()
+                        .add(
+                            Json.obj(
+                                "action",
+                                "UPDATE",
+                                "content",
+                                "我现在喜欢简短回答",
+                                "scope",
+                                "global",
+                                "targetId",
+                                target.get(),
+                                "expectedRevision",
+                                1,
+                                "sourceQuote",
+                                "我现在喜欢简短回答")));
+              return answer;
+            });
+    try {
+      JsonNode first = postJson("/conversations", owner, Json.obj("content", old), 202);
+      String p = first.path("problem").path("id").asText();
+      worker.runOne();
+      target.set(s.all("memory", p).get(0).path("id").asText());
+      assertEquals(0, s.version());
+      assertEquals(0, chatMemory.currentEpoch());
+      var initial = req(get("/api/v1/problems/" + p + "/messages"), owner, null, 200).path("items");
+      assertEquals("ADD", initial.get(1).path("memoryChanges").get(0).path("action").asText());
+      JsonNode second =
+          postJson("/problems/" + p + "/messages", owner, Json.obj("content", correction), 202);
+      worker.runOne();
+      assertEquals("succeeded", job(second.path("id").asText()).path("status").asText());
+      assertEquals("我现在喜欢简短回答", s.get("memory", target.get()).path("content").asText());
+      assertEquals(0, s.version());
+      assertEquals(1, chatMemory.currentEpoch());
+      postJson("/problems/" + p + "/messages", owner, Json.obj("content", "展开刚才第二点"), 202);
+      worker.runOne();
+      String history = inputs.get(2).path("untrustedConversation").toString();
+      assertTrue(history.contains("当前新答第二点"));
+      assertTrue(history.contains(correction));
+      assertFalse(history.contains("旧答代号：红石"));
+      String other =
+          postJson("/conversations", owner, Json.obj("content", "请按我的回答偏好讨论这件事"), 202)
+              .path("problem")
+              .path("id")
+              .asText();
+      worker.runOne();
+      assertTrue(inputs.get(3).path("memories").toString().contains("我现在喜欢简短回答"));
+      assertTrue(
+          req(get("/api/v1/memories").param("problemId", other), owner, null, 200)
+              .path("items")
+              .toString()
+              .contains(target.get()));
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void manualCorrectionChangesProvenanceAndQueuedOldReplyCannotRecordDecision() throws Exception {
+    var server =
+        modelServer(
+            request ->
+                Json.obj(
+                    "content",
+                    "已响应",
+                    "evidence",
+                    Json.arr(),
+                    "uncertainties",
+                    Json.arr(),
+                    "memoryActions",
+                    Json.arr()
+                        .add(
+                            Json.obj(
+                                "action",
+                                "ADD",
+                                "content",
+                                "我喜欢简短回答",
+                                "scope",
+                                "global",
+                                "sourceQuote",
+                                "我喜欢简短回答"))));
+    try {
+      String p =
+          postJson("/conversations", owner, Json.obj("content", "我喜欢简短回答"), 202)
+              .path("problem")
+              .path("id")
+              .asText();
+      worker.runOne();
+      String id = s.all("memory", p).get(0).path("id").asText();
+      var queued =
+          postJson("/problems/" + p + "/messages", owner, Json.obj("content", "我决定选择方案乙。"), 202);
+      JsonNode corrected =
+          req(
+              patch("/api/v1/memories/" + id),
+              owner,
+              Json.obj("expectedRevision", 1, "content", "我喜欢详细回答"),
+              200);
+      assertEquals("manual", corrected.path("origin").asText());
+      assertEquals("global", corrected.path("scope").asText());
+      assertFalse(corrected.has("sourceQuote"));
+      assertFalse(corrected.has("sourceMessageId"));
+      assertEquals("我喜欢详细回答", corrected.path("evidence").get(0).path("quote").asText());
+      worker.runOne();
+      assertEquals(
+          "CONTEXT_CHANGED", job(queued.path("id").asText()).path("error").path("code").asText());
+      assertEquals(1, s.db.queryForObject("SELECT count(*) FROM model_calls", Integer.class));
+      assertTrue(s.all("decision", p).isEmpty());
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void automaticMemoryChangeDuringModelCallRejectsOldReplyAndDecision() throws Exception {
+    var target = new java.util.concurrent.atomic.AtomicReference<String>();
+    var calls = new java.util.concurrent.atomic.AtomicInteger();
+    var server =
+        modelServer(
+            request -> {
+              ObjectNode answer =
+                  Json.obj("content", "响应", "evidence", Json.arr(), "uncertainties", Json.arr());
+              if (calls.incrementAndGet() == 1) {
+                answer.set(
+                    "memoryActions",
+                    Json.arr()
+                        .add(
+                            Json.obj(
+                                "action",
+                                "ADD",
+                                "content",
+                                "我喜欢长篇回答",
+                                "scope",
+                                "global",
+                                "sourceQuote",
+                                "我喜欢长篇回答")));
+              } else {
+                String p = s.get("memory", target.get()).path("problemId").asText();
+                String correction = "我喜欢长篇回答这条记忆记错了，我现在喜欢简短回答";
+                s.write(
+                    () -> {
+                      ObjectNode user =
+                          s.create(
+                              "message",
+                              p,
+                              Json.obj("problemId", p, "role", "user", "content", correction));
+                      s.db.update(
+                          "UPDATE records SET memory_epoch=? WHERE id=?::uuid",
+                          chatMemory.currentEpoch(),
+                          user.path("id").asText());
+                      var changes =
+                          chatMemory.apply(
+                              p,
+                              user.path("id").asText(),
+                              Json.arr()
+                                  .add(
+                                      Json.obj(
+                                          "action",
+                                          "UPDATE",
+                                          "content",
+                                          "我现在喜欢简短回答",
+                                          "scope",
+                                          "global",
+                                          "sourceQuote",
+                                          "我现在喜欢简短回答",
+                                          "targetId",
+                                          target.get(),
+                                          "expectedRevision",
+                                          1)),
+                              chatMemory.retrieve(p, correction));
+                      assertEquals(1, changes.size());
+                      return null;
+                    });
+                answer.set("decisionCandidate", Json.obj("choice", "选择方案乙", "quote", "我决定选择方案乙。"));
+              }
+              return answer;
+            });
+    try {
+      String p =
+          postJson("/conversations", owner, Json.obj("content", "我喜欢长篇回答"), 202)
+              .path("problem")
+              .path("id")
+              .asText();
+      worker.runOne();
+      target.set(s.all("memory", p).get(0).path("id").asText());
+      JsonNode queued =
+          postJson("/problems/" + p + "/messages", owner, Json.obj("content", "我决定选择方案乙。"), 202);
+      worker.runOne();
+      assertEquals(
+          "CONTEXT_CHANGED", job(queued.path("id").asText()).path("error").path("code").asText());
+      assertEquals(0, s.version());
+      assertEquals(1, chatMemory.currentEpoch());
+      assertEquals(
+          1,
+          s.all("message", p).stream()
+              .filter(m -> m.path("role").asText().equals("assistant"))
+              .count());
+      assertTrue(s.all("decision", p).isEmpty());
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void onlyPersistedExplicitDecisionIsReturnedOnAssistant() throws Exception {
+    String text = "我决定选择方案乙。";
+    var server =
+        modelServer(
+            request ->
+                Json.obj(
+                    "content",
+                    "可以继续细化下一步。",
+                    "evidence",
+                    Json.arr(),
+                    "uncertainties",
+                    Json.arr(),
+                    "decisionCandidate",
+                    Json.obj("choice", "选择方案乙", "quote", text)));
+    try {
+      JsonNode first = postJson("/conversations", owner, Json.obj("content", text), 202);
+      String p = first.path("problem").path("id").asText();
+      worker.runOne();
+      assertEquals("succeeded", job(first.path("job").path("id").asText()).path("status").asText());
+      var messages =
+          req(get("/api/v1/problems/" + p + "/messages"), owner, null, 200).path("items");
+      JsonNode saved = messages.get(1).path("decisionRecord");
+      assertFalse(saved.isMissingNode());
+      assertEquals(text, saved.path("quote").asText());
+      assertEquals(saved.path("id").asText(), s.all("decision", p).get(0).path("id").asText());
+      assertEquals("", saved.path("rationale").asText());
+      assertEquals(0, s.version());
+    } finally {
+      server.stop(0);
+    }
   }
 
   @Test

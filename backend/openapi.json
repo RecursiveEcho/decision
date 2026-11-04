@@ -2094,7 +2094,8 @@
               "type": "string"
             }
           }
-        ]
+        ],
+        "description": "Without problemId return all owner memories. With problemId include that problem plus global memories. Old manual entries default to problem scope; chat provenance is sourceMessageId/sourceQuote. Owner content correction changes origin to manual and removes old chat provenance."
       }
     },
     "/memories/{id}": {
@@ -4993,6 +4994,47 @@
           },
           "thinking": {
             "$ref": "#/components/schemas/Thinking"
+          },
+          "memoryChanges": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "action",
+                "memoryId",
+                "content",
+                "scope",
+                "revision"
+              ],
+              "properties": {
+                "action": {
+                  "enum": [
+                    "ADD",
+                    "UPDATE",
+                    "DELETE"
+                  ]
+                },
+                "memoryId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "content": {
+                  "type": "string"
+                },
+                "scope": {
+                  "enum": [
+                    "global",
+                    "problem"
+                  ]
+                },
+                "revision": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "decisionRecord": {
+            "$ref": "#/components/schemas/Decision"
           }
         },
         "required": [
@@ -5116,6 +5158,28 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "global",
+              "problem"
+            ],
+            "default": "problem"
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "chat",
+              "manual"
+            ]
+          },
+          "sourceMessageId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceQuote": {
+            "type": "string"
           }
         },
         "required": [
@@ -5324,6 +5388,30 @@
             "items": {
               "$ref": "#/components/schemas/Review"
             }
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "chat",
+              "manual"
+            ]
+          },
+          "userMessageId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "quote": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "superseded"
+            ]
+          },
+          "supersedesId": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [

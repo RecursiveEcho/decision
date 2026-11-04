@@ -52,9 +52,10 @@ class AttachmentsTest {
     assertTrue(System.getenv("TEST_DATABASE_URL").endsWith("/decision_backend_test"));
     s.db.execute(
         "TRUNCATE"
-            + " records,jobs,record_history,idempotency_keys,analysis_pending,observation_keys,discussion_keys,model_calls,login_attempts"
+            + " records,jobs,record_history,idempotency_keys,analysis_pending,observation_keys,discussion_keys,model_calls,login_attempts,chat_memory_tombstones"
             + " CASCADE");
     s.db.update("UPDATE context_version SET revision=0");
+    s.db.update("UPDATE chat_memory_state SET epoch=0");
     c.mock = false;
     c.modelKey = "";
     c.modelBase = "https://api.deepseek.com";
