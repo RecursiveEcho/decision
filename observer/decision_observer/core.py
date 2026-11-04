@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, quote
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from zoneinfo import ZoneInfo
 
@@ -83,6 +83,7 @@ class Store:
           CREATE TABLE IF NOT EXISTS seen (id TEXT PRIMARY KEY, recorded REAL NOT NULL);
           CREATE TABLE IF NOT EXISTS content_cursor (problem TEXT PRIMARY KEY, hash TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, status TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS notification_retry (id TEXT PRIMARY KEY, attempts INTEGER NOT NULL, next_at REAL NOT NULL);
         ''')
 
     def save_status(self, state, error=None):
@@ -164,7 +165,7 @@ def observation(entity, config, problem, since, now):
     return {'externalId': f'pensieve:{library_id}:{entity_id}', 'problemId': problem,
             'text': text, 'appName': str(meta.get('active_app', 'unknown'))[:200],
             'capturedAt': captured.isoformat(), 'extractionMethod': 'ocr',
-            'sourceLocator': {'provider': 'pensieve', 'libraryId': library_id, 'entityId': entity_id},
+            'sourceLocator': {'resourceId': f'pensieve:library:{library_id}', 'frameId': f'pensieve:entity:{entity_id}'},
             'contentHash': hashlib.sha256(text.encode()).hexdigest()}
 
 
@@ -208,6 +209,7 @@ class Runner:
         self.stop_file = store.home / 'pause.request'
         self.last_observation = None
         self.pending_ocr = set()
+        self.delivery_cursor = None
 
     def allowed(self):
         return self.consent and not self.stop_file.exists() and time.monotonic() < self.lease
@@ -275,7 +277,17 @@ class Runner:
         self.heartbeat()
         if not self.allowed():
             raise ObserverError('Consent expired')
-        items = [json.loads(row[1]) for row in rows]
+        selected, items = [], []
+        for row in rows:
+            candidate = items + [json.loads(row[1])]
+            body = {'deviceId': self.config['deviceId'], 'items': candidate}
+            if len(json.dumps(body).encode()) > 900_000:
+                break
+            selected.append(row)
+            items = candidate
+        if not selected:
+            raise ObserverError('Single observation exceeds HTTP body budget')
+        rows = selected
         key = rows[0][2] if len(rows) == 1 else str(uuid.uuid5(uuid.NAMESPACE_URL, '|'.join(row[2] for row in rows)))
         response = self.api.request('POST', '/observations/batch',
             {'deviceId': self.config['deviceId'], 'items': items}, key=key)
@@ -284,17 +296,31 @@ class Runner:
             if item['externalId'] in accepted:
                 self.store.accepted(item['externalId'])
                 self.last_observation = item['capturedAt']
+        rejected = {r['externalId'] for r in response.get('rejected', [])}
+        # An explicit rejection is a known outcome; a new attempt needs a new key.
+        # Unknown network outcomes keep the original key for safe replay.
+        with self.store.db:
+            for item in items:
+                if item['externalId'] in rejected and item['externalId'] not in accepted:
+                    self.store.db.execute('UPDATE queue SET request_key=? WHERE id=?',
+                        (str(uuid.uuid4()), item['externalId']))
         if any(item['externalId'] not in accepted for item in items):
             raise ObserverError('Observation rejected; retained for explicit retry')
 
     def deliver(self):
-        response = self.api.request('GET', f"/devices/{self.config['deviceId']}/deliveries?limit=1")
+        path = f"/devices/{self.config['deviceId']}/deliveries?limit=20"
+        if self.delivery_cursor:
+            path += "&cursor=" + quote(self.delivery_cursor, safe="")
+        response = self.api.request('GET', path)
         for item in response['items']:
             delivery, discussion = item['delivery'], item['discussion']
             ident = str(uuid.UUID(delivery['id']))
             previous = self.store.db.execute('SELECT status FROM notifications WHERE id=?', (ident,)).fetchone()
             status = previous[0] if previous else None
             if status != 'sent':
+                retry = self.store.db.execute('SELECT attempts,next_at FROM notification_retry WHERE id=?', (ident,)).fetchone()
+                if retry and retry[1] > time.time():
+                    continue
                 try:
                     self.notifier(discussion['title'], discussion['reason'])
                     status = 'sent'
@@ -302,9 +328,16 @@ class Runner:
                     status = 'failed'
                 with self.store.db:
                     self.store.db.execute('INSERT OR REPLACE INTO notifications VALUES (?,?)', (ident, status))
+                    if status == 'failed':
+                        attempts = retry[0] + 1 if retry else 1
+                        self.store.db.execute('INSERT OR REPLACE INTO notification_retry VALUES (?,?,?)',
+                            (ident, attempts, time.time() + min(3600, 30 * 2 ** min(attempts - 1, 7))))
+                    else:
+                        self.store.db.execute('DELETE FROM notification_retry WHERE id=?', (ident,))
             self.api.request('POST', f'/deliveries/{ident}/ack',
                 {'status': status, 'error': None if status == 'sent' else 'Desktop notification failed'},
                 key=str(uuid.uuid5(uuid.NAMESPACE_URL, ident + status)))
+        self.delivery_cursor = response.get('nextCursor')
 
     def run(self, resume=False):
         if not resume:
