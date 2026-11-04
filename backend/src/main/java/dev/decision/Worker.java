@@ -17,19 +17,28 @@ class Worker {
   final Model model;
   final Wiki wiki;
   final Evidence evidence;
+  final MemoryOverview overview;
 
   @Value("${app.worker-enabled}")
   boolean enabled;
 
   volatile boolean ready;
 
-  Worker(Store s, Config c, Domain d, Model model, Wiki wiki, Evidence evidence) {
+  Worker(
+      Store s,
+      Config c,
+      Domain d,
+      Model model,
+      Wiki wiki,
+      Evidence evidence,
+      MemoryOverview overview) {
     this.s = s;
     this.c = c;
     this.d = d;
     this.model = model;
     this.wiki = wiki;
     this.evidence = evidence;
+    this.overview = overview;
   }
 
   @EventListener(ApplicationReadyEvent.class)
@@ -57,6 +66,7 @@ class Worker {
               List<Map<String, Object>> jobs =
                   s.db.queryForList(
                       "SELECT id::text,input::text FROM jobs WHERE state='queued' ORDER BY"
+                          + " CASE WHEN input->>'operation'='memory_overview' THEN 1 ELSE 0 END,"
                           + " created_at,id LIMIT 1 FOR UPDATE SKIP LOCKED");
               if (jobs.isEmpty()) return null;
               String id = (String) jobs.get(0).get("id");
@@ -83,6 +93,7 @@ class Worker {
         case "chat" -> chat(work);
         case "analysis" -> analyze(work);
         case "wiki" -> sync(work);
+        case "memory_overview" -> overview.run(work);
         default -> throw new ApiError(400, "UNKNOWN_JOB", "未知任务类型");
       }
     } catch (ApiError e) {

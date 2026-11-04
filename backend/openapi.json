@@ -4751,6 +4751,232 @@
           }
         }
       }
+    },
+    "/memories/overview": {
+      "get": {
+        "operationId": "get_memory_overview",
+        "parameters": [
+          {
+            "name": "problemId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "description": "Owner only. Without problemId includes all eligible memories; with problemId includes global plus this problem. Fingerprint checked before returning derived content. No model calls or mutations.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryOverview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "ensure_memory_overview",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "problemId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "retry": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  }
+                },
+                "required": [
+                  "fingerprint"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "description": "Owner only. Fingerprint is checked even before idempotency replay; obsolete input returns 409 OVERVIEW_CHANGED. Reuses current pending/ready/failed result. Only explicit retry=true of a retryable latest failure creates a new job. No automatic retries. Response contains no summaries. Empty eligible set creates no job.",
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryOverviewMeta"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -5061,7 +5287,8 @@
               "chat",
               "source_ingest",
               "topic_sync",
-              "analysis"
+              "analysis",
+              "memory_overview"
             ]
           },
           "status": {
@@ -5076,7 +5303,7 @@
           "result": {
             "type": "object",
             "nullable": true,
-            "description": "chat: userMessageId,assistantMessageId; source_ingest: sourceId,topicIds; topic_sync: topicId,wikiUrl; analysis: discussionIds"
+            "description": "chat: userMessageId,assistantMessageId; source_ingest: sourceId,topicIds; topic_sync: topicId,wikiUrl; analysis: discussionIds; memory_overview: fingerprint only (items are served solely through the current overview endpoint)"
           },
           "error": {
             "allOf": [
@@ -5720,6 +5947,155 @@
             }
           }
         }
+      },
+      "MemoryOverviewItem": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "global",
+              "problem"
+            ]
+          },
+          "problemId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "memoryRefs": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "revision": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ]
+            }
+          }
+        },
+        "required": [
+          "summary",
+          "scope",
+          "problemId",
+          "memoryRefs"
+        ],
+        "description": "Derived display summary only. Each item cites eligible current user_reported memories of one scope and, for problem scope, one problemId. References cannot appear in multiple items. Global problemId is null."
+      },
+      "MemoryOverviewMeta": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "empty",
+              "missing",
+              "pending",
+              "ready",
+              "failed"
+            ]
+          }
+        },
+        "required": [
+          "jobId",
+          "fingerprint",
+          "status"
+        ]
+      },
+      "MemoryOverview": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "empty",
+              "missing",
+              "pending",
+              "ready",
+              "failed"
+            ]
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "$ref": "#/components/schemas/MemoryOverviewItem"
+            }
+          },
+          "jobId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "error": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Error"
+              }
+            ],
+            "nullable": true
+          },
+          "coverage": {
+            "type": "object",
+            "properties": {
+              "eligibleCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "consideredCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "eligibleCount",
+              "consideredCount",
+              "truncated"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "fingerprint",
+          "items",
+          "jobId",
+          "error",
+          "coverage"
+        ],
+        "description": "Only ready contains items. GET never creates jobs or calls the model. Only active user_reported memories are eligible; inferred, observed and retracted remain in the original list. Coverage counts whole input records, not a promise that the five summaries cover everything."
       }
     }
   }

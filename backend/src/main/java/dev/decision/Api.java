@@ -19,12 +19,14 @@ class Api {
   final Store s;
   final Auth auth;
   final Config c;
+  final MemoryOverview overview;
 
-  Api(Domain d, Store s, Auth a, Config c) {
+  Api(Domain d, Store s, Auth a, Config c, MemoryOverview overview) {
     this.d = d;
     this.s = s;
     auth = a;
     this.c = c;
+    this.overview = overview;
   }
 
   String who(HttpServletRequest r) {
@@ -196,6 +198,21 @@ class Api {
           return null;
         });
     return ResponseEntity.noContent().build();
+  }
+
+  @GetMapping("/memories/overview")
+  ObjectNode memoryOverview(@RequestParam(required = false) String problemId) {
+    return overview.get(problemId);
+  }
+
+  @PostMapping("/memories/overview")
+  ResponseEntity<?> memoryOverview(@RequestBody JsonNode b, HttpServletRequest r) {
+    return s.write(
+        () -> {
+          // Validate freshness even before an older idempotency response can be replayed.
+          overview.checkRequest(b);
+          return post(r, b, 202, () -> overview.request(b));
+        });
   }
 
   @PostMapping("/memories")
