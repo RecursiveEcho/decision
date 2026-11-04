@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { list, logout, request, setSession, token, waitJob } from "./api";
+import DeviceRegistration from "./DeviceRegistration.vue";
 import type {
   Decision,
   Device,
@@ -760,8 +761,16 @@ onUnmounted(() => {
           默认关闭。网页授权同步后，仍须在本地明确启动。暂停同步不能证明底层录屏已经停止。
         </p>
         <p v-if="!devices.length" class="muted">
-          没有设备，请先用本地适配器注册。网页不会自动开启采集。
+          没有设备，请先在下方注册，再将凭据填入本地适配器。网页不会自动开启采集。
         </p>
+        <DeviceRegistration
+          :disabled="busy"
+          @registered="
+            (device) => {
+              devices = [...devices.filter((d) => d.id !== device.id), device];
+            }
+          "
+        />
         <article v-for="d in devices" :key="d.id" class="card">
           <h3>{{ d.name }}</h3>
           <p>
