@@ -1,14 +1,14 @@
 # A 后端回执
 
-状态：A 首版已交付；E在最终Docker复验发现第二篇analysis MODEL_FORMAT，追加修复已通过本地29项测试，等待E定点真实复验。开始时间：2026-11-04 17:29:59 Asia/Shanghai；后端开发完成：2026-11-04 17:59 Asia/Shanghai。用户亲自验收尚未完成。
+状态：A 首版及Docker复验格式失败修复均已完成；29项测试通过，E已在最终镜像对原失败问题定点恢复成功。开始时间：2026-11-04 17:29:59 Asia/Shanghai；首版后端开发完成：2026-11-04 17:59；追加修复验证完成：18:57 Asia/Shanghai。用户亲自验收尚未完成。
 
 工作区 `decision-worktrees/backend`，分支 `feat/mvp-backend`，共同基线 `2fcea57`；独立只读审查已通过。本对话经用户明确分配为 A，仅修改 `backend/` 与 `handoffs/A.md`，不负责根目录或 E 集成。
 
 ## 当前可交付状态
 
 - Java 17 / Spring Boot 3.5.16 / PostgreSQL / Flyway；契约全部路由、OpenAPI、Maven wrapper、非root Dockerfile、独立数据库测试脚本、真实服务 smoke 脚本已交付。
-- 最新代码 `b36532d`（含 `d94bc84`、`1a3d9ed`、`a0224be`、`8377431`），已推送并被E集成到 `integration/mvp-20261104`；本文之后的提交仅整理回执。
-- 必要验证：`backend/test.sh` 在独立一次性 PostgreSQL 上 **26项全部通过**；`mvnw -DskipTests package` 成功。测试报告在本地 `backend/target/surefire-reports`、`target/test-run.log`，不上传运行日志。
+- 最新代码 `6427a5f`（含此前 `b36532d` 等MVP提交），已推送并被E集成到 `integration/mvp-20261104`；本文之后的提交仅整理回执。
+- 必要验证：`backend/test.sh` 在独立一次性 PostgreSQL 上 **29项全部通过**；`mvnw -DskipTests package` 成功。测试报告在本地 `backend/target/surefire-reports`、`target/test-run.log`，不上传运行日志。
 - A亲自执行的真实外部证据：后端→DeepSeek真实回答含5条逐字来源引用并回查通过；Wiki.js 2.5.317真实创建/同页更新/全文读回通过。只使用合成资料。
 - E于17:58的协调状态报告：增强smoke已通过“两篇相关文章→真实主题摘要→同一Wiki页面更新→本人确认决定→追加复盘”，网页/后端已切Docker；仍在做容器复验与带业务数据备份恢复。此条是E报告，A未另起共享库worker复跑。
 - 真实观察、桌面通知本人可见、手机通知、小程序真机、服务器部署和用户验收：**未由A验证**。采集从未由A开启；未改TGA。
@@ -88,3 +88,11 @@
 - E已统一授权并更新契约：owner `POST /problems/{id}/analyze`，{}+幂等键，202 Job；复用现有运行/排队分析，不重复来源/消息；失败Job保留。A同步OpenAPI，B由E协调添加按钮。不扩展通用job重试。
 - 隔离PG测试 **29项通过**。新增验证覆盖7种模型异常格式与失败usage保留、thinking显式关闭、重分析幂等/任务复用/权限/来源消息不重复；现有引用、Wiki、观察和决定测试均继续通过。
 - 增强smoke支持 `--reanalyze PROBLEM_UUID`，只针对现有失败合成问题做真实分析/Wiki回读及无重复数据检查；由E重建唯一后端后执行。A不启动第二worker、不再创造大批smoke数据。
+
+
+## 原失败问题真实恢复完成（2026-11-04 18:57 Asia/Shanghai）
+
+- `6427a5f` 已推送并由E集成；新Docker镜像/Flyway V2部署完成。E在集成目录重跑29项测试通过。
+- E定点执行增强smoke恢复原合成问题 `b2aba752-5c98-486f-9963-b4c81a8b0f05`：真实重分析成功、引用有效、Wiki独立API全文回读一致；Source仍2条、Topic仍1条、Message无重复。旧失败Job保留。不靠另建问题绕过失败。
+- A只读复核数据库安全元信息：最新调用 `status=succeeded`、`finish_reason=stop`、`content_type=object`、`content_length=1770`、`reasoning_length=0`、input/output tokens=761/841；当前source=2、topic=1、message=2。未读取/输出模型正文、key或reasoning内容。
+- 此后无业务代码更改或重复smoke，最终追加提交仅维护回执。仍不将单次恢复当作模型永不返回异常的保证；后续异常可由本人明确重分析，保留诊断证据。
