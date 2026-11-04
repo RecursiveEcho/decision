@@ -28,6 +28,10 @@ const referenced = (refs: { id: string; revision: number }[]) =>
   refs
     .map((ref) => props.memories.find((memory) => memory.id === ref.id)!)
     .filter(Boolean);
+const originalPreview = (content: string) => {
+  const characters = Array.from(content.replace(/\s+/g, " ").trim());
+  return characters.slice(0, 36).join("") + (characters.length > 36 ? "…" : "");
+};
 </script>
 
 <template>
@@ -106,12 +110,12 @@ const referenced = (refs: { id: string; revision: number }[]) =>
       <summary>查看全部记录（{{ memories.length }}）</summary>
       <p v-if="!memories.length" class="muted">还没有记录。</p>
       <details
-        v-for="(memory, index) in memories"
+        v-for="memory in memories"
         :key="memory.id + ':' + memory.revision"
         class="memory-raw"
       >
         <summary>
-          记录 {{ index + 1
+          原记录：{{ originalPreview(memory.content)
           }}<span v-if="memory.status !== 'active'"> · 已忘记</span
           ><span v-else-if="memory.kind === 'inferred'"> · 推断</span
           ><span v-else-if="memory.kind === 'observed'"> · 观察所得</span>
