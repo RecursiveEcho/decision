@@ -1,0 +1,97 @@
+name: decision-mvp
+
+x-postgres-image: &postgres-image postgres:16@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
+
+services:
+  database:
+    image: *postgres-image
+    environment:
+      POSTGRES_DB: decision
+      POSTGRES_USER: decision
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?Run python3 scripts/manage.py init}
+    ports:
+      - "127.0.0.1:${DATABASE_HOST_PORT:-55432}:5432"
+    volumes:
+      - decision-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U decision -d decision"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  wiki-database:
+    image: *postgres-image
+    environment:
+      POSTGRES_DB: wiki
+      POSTGRES_USER: wiki
+      POSTGRES_PASSWORD: ${WIKI_DATABASE_PASSWORD:?Run python3 scripts/manage.py init}
+    volumes:
+      - wiki-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wiki -d wiki"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  wiki:
+    image: ghcr.io/requarks/wiki:2@sha256:e4708eed80c014449c0c8426c8d466c7a52a62131555bb44372fa48378b448b8
+    environment:
+      DB_TYPE: postgres
+      DB_HOST: wiki-database
+      DB_PORT: "5432"
+      DB_USER: wiki
+      DB_PASS: ${WIKI_DATABASE_PASSWORD}
+      DB_NAME: wiki
+    depends_on:
+      wiki-database:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${WIKI_HOST_PORT:-8090}:3000"
+    volumes:
+      - wiki-content:/wiki/data
+    restart: unless-stopped
+
+  backend:
+    profiles: [app]
+    build:
+      context: ./backend
+    environment:
+      APP_PORT: "8080"
+      APP_OWNER_ACCESS_CODE: ${APP_OWNER_ACCESS_CODE:?Run init}
+      APP_TOKEN_SECRET: ${APP_TOKEN_SECRET:?Run init}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://127.0.0.1:8088}
+      DATABASE_URL: jdbc:postgresql://database:5432/decision
+      DATABASE_USER: decision
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-flash}
+      WIKI_BASE_URL: http://wiki:3000
+      WIKI_PUBLIC_URL: ${WIKI_PUBLIC_URL:-http://127.0.0.1:8090}
+      WIKI_ACCESS_TOKEN: ${WIKI_ACCESS_TOKEN:-}
+      WIKI_LOCALE: ${WIKI_LOCALE:-zh}
+    depends_on:
+      database:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+    restart: unless-stopped
+
+  web:
+    profiles: [app]
+    image: nginx:stable-alpine@sha256:0e52bd054126cdc040b1276c0af347aeb02a41b9cfe305d6094767ac30e97949
+    depends_on:
+      - backend
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8088}:80"
+    volumes:
+      - ./web/dist:/usr/share/nginx/html:ro
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+
+volumes:
+  decision-db:
+  wiki-db:
+  wiki-content:

@@ -103,3 +103,4 @@ A 至少建立 problems、sources、messages、jobs、memories（含 revision hi
 - Observer：Python 3.11+ 独立环境；C 给出 `python -m decision_observer status|run|pause|stop` 实际命令，不能将服务与默认录屏自启绑定。默认只连 loopback Pensieve，不暴露其原始历史 API 到公网。
 - Mini：D 使用 `API_BASE_URL` 的本地配置入口，不内置 token、owner code 或 DeepSeek key。真机连接需实际可达的后端和相应平台条件，localhost 不代表手机能访问。
 - E 维护根 `.env.example` 与 Compose；模块新增必要配置写入回执，由 E 合并。
+- 2026-11-04 集成补充：`WIKI_BASE_URL` 仅用于服务端请求；`WIKI_PUBLIC_URL` 用于返回给客户端的页面链接，未设置时回退 BASE。容器内地址不能暴露为浏览器链接。API JSON 字段不变。
