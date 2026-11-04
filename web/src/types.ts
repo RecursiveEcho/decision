@@ -154,6 +154,7 @@ export interface KnowledgeEntry {
   refs: KnowledgeRef[];
   revision: number;
   proposalId: string;
+  coverage: KnowledgeCoverage;
   createdAt: string;
   updatedAt: string;
 }

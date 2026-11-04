@@ -4,6 +4,7 @@ import { list, request, sessionId } from "./api";
 import { renderMarkdown } from "./markdown";
 import type { KnowledgeEntry } from "./types";
 import KnowledgeReferences from "./KnowledgeReferences.vue";
+import KnowledgeReadScope from "./KnowledgeReadScope.vue";
 defineProps<{ disabled: boolean }>();
 defineEmits<{ source: [id: string]; conversation: [id: string] }>();
 const entries = ref<KnowledgeEntry[]>([]),
@@ -185,6 +186,7 @@ onUnmounted(() => {
         {{ selected.domains.join(" / ") }}
       </p>
       <div class="markdown-body" v-html="renderMarkdown(selected.markdown)" />
+      <KnowledgeReadScope :coverage="selected.coverage" />
       <KnowledgeReferences
         :refs="selected.refs"
         :disabled="disabled"
@@ -227,6 +229,7 @@ onUnmounted(() => {
             class="markdown-body"
             v-html="renderMarkdown(version.markdown)"
           />
+          <KnowledgeReadScope :coverage="version.coverage" />
           <KnowledgeReferences
             :refs="version.refs"
             :disabled="disabled"
