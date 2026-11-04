@@ -151,6 +151,7 @@ class Worker {
   void current(Model.Context ctx) {
     if (s.version() != ctx.version())
       throw new ApiError(409, "CONTEXT_CHANGED", "处理期间资料/记忆已更正，请重新提问", true);
+    d.chatMemory.requireCurrent(ctx.memorySnapshot());
   }
 
   void ingest(ObjectNode work) {
@@ -269,6 +270,15 @@ class Worker {
             }
             s.db.update("UPDATE records SET auto_title=false WHERE id=?::uuid", p);
           }
+          ArrayNode memoryChanges =
+              d.chatMemory.apply(
+                  p,
+                  work.path("userMessageId").asText(),
+                  response.path("memoryActions"),
+                  ctx.memorySnapshot());
+          ObjectNode decisionRecord =
+              model.decisions.capture(
+                  p, work.path("userMessageId").asText(), response.path("decisionCandidate"));
           ObjectNode assistant =
               s.create(
                   "message",
@@ -290,6 +300,18 @@ class Worker {
                       work.path("thinking").asText("off"),
                       "attachments",
                       Json.arr()));
+          if (!memoryChanges.isEmpty()) assistant.set("memoryChanges", memoryChanges);
+          if (decisionRecord != null) assistant.set("decisionRecord", decisionRecord);
+          long replyEpoch = d.chatMemory.currentEpoch();
+          s.db.update(
+              "UPDATE records SET data=?::jsonb,memory_epoch=? WHERE id=?::uuid",
+              assistant.toString(),
+              replyEpoch,
+              assistant.path("id").asText());
+          s.db.update(
+              "UPDATE records SET memory_epoch=? WHERE id=?::uuid",
+              replyEpoch,
+              work.path("userMessageId").asText());
           success(
               work.path("jobId").asText(),
               Json.obj(

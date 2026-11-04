@@ -14,13 +14,15 @@ class Domain {
   final Evidence evidence;
   final Auth auth;
   final Attachments attachments;
+  final ChatMemory chatMemory;
 
-  Domain(Store s, Config c, Evidence e, Auth a, Attachments attachments) {
+  Domain(Store s, Config c, Evidence e, Auth a, Attachments attachments, ChatMemory chatMemory) {
     this.s = s;
     this.c = c;
     this.evidence = e;
     this.auth = a;
     this.attachments = attachments;
+    this.chatMemory = chatMemory;
   }
 
   ObjectNode problem(JsonNode b) {
@@ -181,8 +183,9 @@ class Domain {
     ArrayNode metadata = attachments.save(id, user.path("id").asText(), uploads);
     user.set("attachments", metadata);
     s.db.update(
-        "UPDATE records SET data=?::jsonb WHERE id=?::uuid",
+        "UPDATE records SET data=?::jsonb,memory_epoch=? WHERE id=?::uuid",
         user.toString(),
+        chatMemory.currentEpoch(),
         user.path("id").asText());
     ArrayNode attachmentIds = Json.arr();
     metadata.forEach(meta -> attachmentIds.add(meta.path("id")));
@@ -280,6 +283,7 @@ class Domain {
 
   ObjectNode editMemory(String id, JsonNode b) {
     ObjectNode m = s.get("memory", id);
+    ObjectNode before = m.deepCopy();
     revision(m, b);
     String p = m.path("problemId").asText();
     if (b.has("content")) m.put("content", Json.required(b, "content", 10000));
@@ -325,6 +329,11 @@ class Domain {
       }
     }
     m.put("revision", m.path("revision").asInt() + 1);
+    chatMemory.manualChange(before);
+    if (b.has("content") && before.path("origin").asText().equals("chat")) {
+      m.put("origin", "manual");
+      m.remove(List.of("sourceMessageId", "sourceQuote"));
+    }
     invalidate(p, id);
     s.bump();
     return s.save("memory", m);
@@ -332,6 +341,7 @@ class Domain {
 
   void deleteMemory(String id) {
     ObjectNode m = s.get("memory", id);
+    chatMemory.manualChange(m);
     if (m.path("kind").asText().equals("user_reported"))
       for (JsonNode e : m.path("evidence"))
         try {
@@ -662,7 +672,7 @@ class Domain {
 
   List<ObjectNode> list(String kind, String p) {
     if (p != null) s.get("problem", p);
-    List<ObjectNode> items = s.all(kind, p);
+    List<ObjectNode> items = kind.equals("memory") ? chatMemory.list(p) : s.all(kind, p);
     if (kind.equals("device"))
       for (ObjectNode d : items)
         if (d.hasNonNull("lastHeartbeatAt")

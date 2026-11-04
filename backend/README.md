@@ -25,7 +25,7 @@ Java 17、Spring Boot 3.5.16、PostgreSQL 16+、Flyway；运行接口见 [openap
 - `Api/Auth/ApiFilter`：登录限流、HMAC token、设备权限、请求体 1 MiB 上限、加密幂等响应。变更事务以单所有者 PostgreSQL advisory lock 串行化，避免重复任务、版本覆盖与暂停竞态。
 - `Store/Domain`：单库按 kind 区分实体；records JSONB 与 record_history 保留历史；jobs、observation_keys、discussion_keys、model_calls 等独立表承载并发约束和用量。删除是当前检索撤销，备份/历史不声称物理擦除。
 - `Worker`：一条有界持久化 worker，200 个待处理/运行任务上限；启动将中断任务标 failed/PROCESS_RESTARTED，排队任务继续。新来源分析按问题合并 dirty 状态，允许无议题；失败不自动无限重试模型。
-- `Model/Evidence`：最多 8 段来源（每段 6000 字）、20 条活跃记忆和最近 12 条用户/助手对话（单条 6000 字、合计 24000 字）；对话作为不可信历史帮助理解连续追问，不能成为引用来源。来源与系统指令分离。引用校验 source 所属问题、实际原文和提供给模型的片段。模型无副作用工具，不能创建决定。无效引用删除并提示；并非证明回答每项断言成立。
+- `Model/Evidence`：最多 8 段来源（每段 6000 字）、最多 16 条相关/全局活跃记忆和最近 12 条用户/助手对话（单条 6000 字、合计 24000 字）；对话作为不可信历史帮助理解连续追问，不能成为引用来源。来源与系统指令分离。引用校验 source 所属问题、实际原文和提供给模型的片段。模型无副作用工具；显式本人决定候选经服务端原句与顺序校验后才存档。无效引用删除并提示；并非证明回答每项断言成立。
 - `SafeFetch`：仅标准端口 HTTP(S)，每跳和实际连接 DNS 验证拒绝私网/本地地址；重定向、体积和超时有上限。读取失败 job 明确失败，用户可粘贴正文。暂不处理浏览器登录网页或视频。
 - `Wiki`：按 topic UUID 固定页面路径，先查后建/更新，再回读全文比对；不将 HTTP 200 等同于同步成功。同问题资料合并至一个主题；模型提炼观点、适用条件、不确定性及核验引用，主题修订保留历史。摘要失败明确显示未完成并保留已保存来源。来源/记忆撤销时主题失效并排队覆盖 Wiki 内容。
 - 记忆修正/删除让派生记忆、主题和议题失效。原决定和复盘保留历史依据；模型检索不读取已失效内容。外部同步失败时保留 failed，不能声称 Wiki 已清理。
@@ -43,7 +43,7 @@ Java 17、Spring Boot 3.5.16、PostgreSQL 16+、Flyway；运行接口见 [openap
 
 `POST /api/v1/jobs/{id}/retry` body严格为`{}`，同样需要owner及幂等键。仅失败chat可重试；复用原userMessageId，不重复用户气泡、不重置旧Job。每个失败Job通过内部retryOfJobId和唯一索引最多派生一个子任务；不同key、并发或大小写UUID路径都复用它，即使它已失败。再次尝试须针对新的失败Job。没有子任务时，原消息已删除或上下文已变更返回409 CONTEXT_CHANGED；已有子任务仅返回，不启动新工作，worker执行时仍校验上下文。非failed/nonchat返回409 JOB_NOT_RETRYABLE。
 
-模型提示改为先给贴合困扰的轻量帮助，默认2–4短句，最多一个必要追问，不要求先填表或上传资料；无来源允许一般建议及空引用。整理只呈现在正文，不自动写目标、约束、未知、记忆或决定。接口/事务由隔离测试验证，实际首答质量必须另做真实模型与UI验收。
+模型提示改为先给贴合困扰的轻量帮助，默认2–4短句，最多一个必要追问，不要求先填表或上传资料；无来源允许一般建议及空引用。不自动写目标、约束或未知；当前原话中的稳定本人事实与明确决定可按下述约束自动存档。接口/事务由隔离测试验证，实际首答质量必须另做真实模型与UI验收。
 
 ## 显式重新分析与模型诊断
 
@@ -76,3 +76,15 @@ Java 17、Spring Boot 3.5.16、PostgreSQL 16+、Flyway；运行接口见 [openap
 思考响应体上限2MiB（off仍1MiB）；仅保存reasoning长度，不存/返回推理原文。档位和附件重试原样复用，超时/输出预算失败明确保留原话。
 
 官方依据：[DeepSeek图像](https://api-docs.deepseek.com/guides/vision/)、[思考档位](https://api-docs.deepseek.com/guides/thinking_mode/)、[PDFBox](https://pdfbox.apache.org/download.cgi)、[POI](https://poi.apache.org/download.cgi)。合成HTTP夹具只能验证请求格式，真实图片/文档理解与各档位体验由E统一记录，不能当作已实测。
+
+## 对话自动记忆与决定
+
+借鉴 [Mem0 v1.0.0 方法](docs/mem0-attribution.md)，在现有 Java/PostgreSQL 内实现候选提取、词法检索与 ADD/UPDATE/DELETE/NONE 协调；不引入 SDK、向量服务或额外模型调用。模型同次 chat 响应可提供 memoryActions（最多5项）与 decisionCandidate，analysis 不执行这些写入。
+
+自动记忆绑定当前 userMessageId 与完整原句，只接受本人陈述；引述、第三人、附件、假设、合成描述不作为本人事实。stable global 跨问题检索，临时事实仅 problem；列表带 scope/origin/sourceMessageId/sourceQuote。相关度为中文二元组和英文词，最多12条相关/本问题与4条稳定全局补充，不是向量检索。UPDATE/DELETE 仅作用于本次检索的自动记忆，要求 expectedRevision 和明确纠正/遗忘意图，可用完整旧事实或明确且唯一的主题对象绑定；所有可访问活动记忆参与歧义检查，模糊代词/泛谓词不猜测。主题由明确选购/关于等句法识别并在更新后保留，保守规则可能漏记复杂口语。
+
+V6 内部来源序号、幂等账本与墓碑防止旧任务复活已忘记内容；手工修改的内容改为 origin=manual，并移除旧自动引语，保留纠正后的 user_statement 依据。自动写入不 bump 全局上下文；更新/遗忘增加独立 memory epoch，使在途旧快照失效并过滤旧对话。当前纠正轮 user/assistant 保存新 epoch，因此紧接着的追问仍可承接；新显式陈述可以重新学习。历史与备份保留，不表示物理删除。
+
+决定仅接受当前原话明确选择/承诺，完整保留否定与选择对象，不把建议、考虑、提问、能力或他人话语当决定。理由/预期未在原话明确给出则为空。V7 约束每条用户消息最多一个自动决定，删除后旧重试也不重建；更改决定须明确表达改变并指向同问题当前自动决定，旧条标 superseded，手工决定不被自动覆盖。只有实际保存后助手消息才带 memoryChanges / decisionRecord；不以模型口头“已记录”代替成功证据。
+
+以上机制由隔离数据库与 HTTP 替身测试覆盖，真实模型是否正确提取候选、页面显示及跨轮体验由 E 统一部署后验收，不因单元测试通过而宣称实际完成。
