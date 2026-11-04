@@ -60,3 +60,17 @@ uv run --project observer --python 3.12 python -m decision_observer --home .loca
 Ctrl-C 停止。此命令只轮询通知，不访问 Pensieve 或屏幕；本轮交付未自动启动它。`manage.py stop` 管理 Compose，不能替代在通知终端 Ctrl-C。系统接受通知不代表通知权限/专注模式允许本人看到。
 
 另一台电脑或换设备时，先在网页注册设备保存一次性凭据，再按 `observer/README.md` 的 `configure --notifications-only` 配置，不需要安装或开启录屏。
+## 讨论后入库与 Obsidian 本机镜像
+
+在已有对话点击“整理入库”，审阅 AI 的新增/合并/修订建议，再确认保存。准备提案不会写正式知识；旧资料与主题也不会自动升级。继续聊天后可重新整理；目标已更新的提案需重新对照。知识中的领域、出处、相关知识和旧版本均可查看。
+
+`python3 scripts/manage.py up` 同时启动本项目专用的本机知识同步进程；不是开机自启，不开启录屏或通知。默认目录为 `~/Documents/Decision Knowledge`，在 Obsidian 中以“打开文件夹为仓库”打开，阅读 `知识总览.md`，再打开原生关系图谱浏览领域/知识/出处连接。已有私人 Obsidian 仓库不受影响。可在本机 `.env` 的 `OBSIDIAN_VAULT_PATH` 指定专用真实目录，勿指向含有同名个人文件的目录或符号链接。
+
+- `python3 scripts/manage.py knowledge-status`：本机进程、最近同步时间、知识/领域数及错误；仅入库成功不代表文件已同步。
+- `python3 scripts/manage.py knowledge-sync`：立即执行一次同步；正常后台约10秒增量更新，失败退避重试，不调用模型。
+- `python3 scripts/manage.py knowledge-stop`：只停止同步，保留镜像与项目服务；`python3 scripts/knowledge_sync.py start` 再启动。
+- `python3 scripts/manage.py stop`：停止本机同步及项目服务，保留全部数据。
+
+镜像使用稳定ID文件名，正文保留标题及领域链接；分类变化不改变知识身份。只处理本程序清单管理的文件，原子替换并记录中断恢复清单。若发现手动修改、文件冲突或符号链接则暂停覆盖；先把本机手写内容移到专用目录之外，再重试。不要通过删除清单来强行覆盖。Obsidian 配置、用户添加的其他文件、原附件不被同步；本机仅保留引用的必要片段，不复制全部聊天和个人记忆。数据库备份包含正式知识、提案与历史；镜像可重建，修改前保留的私人文件需另行备份。
+
+自动分类和关系链接是整理建议；有界检索不代表完整全库冲突检测。对话文字、助手陈述与正式资料分别保留身份，助手内容不因此成为外部事实。附件原件首版不直接纳入整理或导出，提案中说明覆盖范围。

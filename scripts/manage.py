@@ -151,7 +151,8 @@ def verify_backup(directory):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('command', choices=['init','check','infra','build','up','stop','status','backup','verify-backup'])
+    parser.add_argument('command', choices=['init','check','infra','build','up','stop','status','backup','verify-backup',
+                                           'knowledge-sync','knowledge-status','knowledge-stop'])
     parser.add_argument('backup_directory', nargs='?')
     args = parser.parse_args()
     if args.command == 'init':
@@ -195,13 +196,27 @@ def main():
         else:
             raise RuntimeError('Containers started but backend/web readiness failed; inspect local service logs.')
         status()
+        import knowledge_sync
+        knowledge_sync.start()
     elif args.command == 'stop':
+        import knowledge_sync
+        knowledge_sync.stop()
         compose('--profile', 'app', 'stop')
         print('Containers stopped; data volumes retained. Observer is managed separately.')
     elif args.command == 'status':
         status()
     elif args.command == 'backup':
         backup()
+    elif args.command.startswith('knowledge-'):
+        import knowledge_sync
+        if args.command == 'knowledge-sync':
+            print(json.dumps(knowledge_sync.once(), ensure_ascii=False))
+        elif args.command == 'knowledge-stop':
+            knowledge_sync.stop()
+        else:
+            state = knowledge_sync.read_json(knowledge_sync.STATE / 'status.json', {'status': 'not_started'})
+            state['running'] = knowledge_sync.process_running()
+            print(json.dumps(state, ensure_ascii=False, indent=2))
     else:
         if not args.backup_directory:
             parser.error('verify-backup requires backup_directory')
