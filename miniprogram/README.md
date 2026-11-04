@@ -53,6 +53,8 @@ npm run check
 
 微信官方 `RequestOption.method` 当前类型列表不含 PATCH，而共享契约用 PATCH 处理议题状态。因此 D 只实现任务卡要求的议题列表，处理已读/稍后/忽略请用网页。未使用未经 E 确认的 POST 别名或 method override；若需小程序内处理，由 E 统一调整契约，A 实现后再接入。
 
+总控已在集成契约新增 `POST /problems/{id}/analyze`：由本人显式重分析，携带 owner token 与 Idempotency-Key，提交 `{}` 后返回 202 analysis Job。D 本轮不接入此管理操作；**失败后的重分析请使用网页**，不要靠重复提交原资料触发重分析。
+
 官方依据：[微信 API 类型定义](https://github.com/wechat-miniprogram/api-typings/blob/master/types/wx/lib.wx.api.d.ts)（2026-11-04 核查 RequestOption）；[请求接口](https://developers.weixin.qq.com/miniprogram/dev/api/network/request/wx.request.html)、[网络要求](https://developers.weixin.qq.com/miniprogram/dev/framework/ability/network.html)、[项目配置](https://developers.weixin.qq.com/miniprogram/dev/devtools/projectconfig.html)。本次官方文档网页抓取失败，未以抓取结果假称工具编译验证。
 
 真实模型、Wiki、电脑观察和桌面通知由对应角色分别验证。D 不以模拟网络测试替代这些证据，也未验证手机通知、服务器部署或小程序发布。
