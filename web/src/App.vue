@@ -9,23 +9,32 @@ import {
   token,
   waitJob,
 } from "./api";
-import DeviceRegistration from "./DeviceRegistration.vue";
 import AppSidebar from "./AppSidebar.vue";
-import { ArrowUp, Menu, RefreshCw, LoaderCircle, Paperclip } from "@lucide/vue";
+import EvidencePanel from "./EvidencePanel.vue";
+import AttachmentList from "./AttachmentList.vue";
+import ChatRecords from "./ChatRecords.vue";
+import {
+  ArrowUp,
+  Menu,
+  RefreshCw,
+  LoaderCircle,
+  Paperclip,
+  ChevronDown,
+  Check,
+} from "@lucide/vue";
+import { FILE_ACCEPT } from "./attachments";
 import { renderMarkdown } from "./markdown";
 import { useChatFlow } from "./chatFlow";
 import type {
-  Decision,
-  Device,
-  Discussion,
   Evidence,
+  Decision,
   Job,
   Memory,
   Message,
   Problem,
   Source,
-  Status,
   Topic,
+  Thinking,
 } from "./types";
 const logged = ref(!!token()),
   accessCode = ref(""),
@@ -38,6 +47,22 @@ const sidebarCollapsed = ref(false);
 const sidebarModal = ref(false);
 const composing = ref(false);
 const mainPane = ref<HTMLElement | null>(null);
+const fileInput = ref<HTMLInputElement | null>(null);
+const thinkingMenu = ref<HTMLElement | null>(null);
+const thinkingOpen = ref(false);
+const draggingFiles = ref(false);
+const thinkingOptions: {
+  value: Thinking;
+  label: string;
+  description: string;
+}[] = [
+  { value: "off", label: "快速", description: "直接回答" },
+  { value: "low", label: "轻度", description: "稍作思考" },
+  { value: "high", label: "深度", description: "深入推理" },
+  { value: "max", label: "最高", description: "更充分地推敲" },
+];
+const thinkingLabel = (value: Thinking) =>
+  thinkingOptions.find((option) => option.value === value)?.label || "快速";
 let scrollInteraction = 0;
 const tab = ref("讨论"),
   problems = ref<Problem[]>([]),
@@ -50,25 +75,15 @@ const problem = computed(() =>
 const messages = ref<Message[]>([]),
   sources = ref<Source[]>([]),
   memories = ref<Memory[]>([]),
-  topics = ref<Topic[]>([]),
-  discussions = ref<Discussion[]>([]),
   decisions = ref<Decision[]>([]),
-  devices = ref<Device[]>([]),
-  status = ref<Status | null>(null);
+  topics = ref<Topic[]>([]);
 const sourceDetail = ref<Source | null>(null),
   newProblem = ref(true),
   sourceTitle = ref(""),
   sourceText = ref(""),
   sourceUrl = ref(""),
-  chosenSources = ref<string[]>([]),
-  memoryText = ref(""),
-  choice = ref(""),
-  rationale = ref(""),
-  outcome = ref(""),
-  reviewAt = ref("");
-const reviewDraft = ref<
-  Record<string, { outcome: string; reflection: string }>
->({});
+  chosenSources = ref<string[]>([]);
+const sourceQuotes = ref<Evidence[]>([]);
 const composer = ref<HTMLFormElement | null>(null);
 const composerInput = ref<HTMLTextAreaElement | null>(null);
 const errorBanner = ref<HTMLDivElement | null>(null);
@@ -92,6 +107,62 @@ const chat = useChatFlow({
   },
 });
 const pendingChat = chat.pending;
+const draftTarget = computed(() =>
+  newProblem.value ? "new" : selected.value || "new",
+);
+const draftFiles = computed(() => chat.files.value[draftTarget.value] || []);
+const selectedThinking = computed(
+  () =>
+    pendingChat.value?.thinking ||
+    chat.thinking.value[draftTarget.value] ||
+    "off",
+);
+async function addAttachments(incoming: File[]) {
+  if (!incoming.length || busy.value || pendingChat.value) return;
+  const target = draftTarget.value;
+  await act(() => chat.addFiles(target, incoming));
+}
+function fileChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  void addAttachments(Array.from(input.files || []));
+  input.value = "";
+}
+function pasteAttachments(event: ClipboardEvent) {
+  const files = Array.from(event.clipboardData?.files || []);
+  if (!files.length) return;
+  event.preventDefault();
+  if (busy.value || pendingChat.value) return;
+  const text = event.clipboardData?.getData("text/plain");
+  if (text) chatDraft.value += text;
+  void addAttachments(files);
+}
+function dragAttachments(event: DragEvent) {
+  if (!event.dataTransfer?.types.includes("Files")) return;
+  event.preventDefault();
+  draggingFiles.value = !busy.value && !pendingChat.value;
+}
+function dropAttachments(event: DragEvent) {
+  if (!event.dataTransfer?.files.length) return;
+  event.preventDefault();
+  draggingFiles.value = false;
+  void addAttachments(Array.from(event.dataTransfer.files));
+}
+function chooseThinking(value: Thinking) {
+  try {
+    chat.setThinking(draftTarget.value, value);
+    thinkingOpen.value = false;
+  } catch (failure) {
+    error.value =
+      failure instanceof Error ? failure.message : "未能保存思考档位。";
+  }
+}
+function closeThinking(event: Event) {
+  if (!thinkingMenu.value?.contains(event.target as Node))
+    thinkingOpen.value = false;
+}
+function cleanupFailure(event: Event) {
+  error.value = (event as CustomEvent<string>).detail;
+}
 const chatDraft = computed({
   get: () =>
     chat.drafts.value[newProblem.value ? "new" : selected.value || "new"] || "",
@@ -108,9 +179,11 @@ const showPendingSentence = computed(
     pendingChat.value &&
     (newProblem.value || pendingChat.value.problemId === selected.value) &&
     (newProblem.value ||
-      !messages.value.some(
-        (m) => m.role === "user" && m.content === pendingChat.value!.content,
-      )),
+      !messages.value
+        .slice(-1)
+        .some(
+          (m) => m.role === "user" && m.content === pendingChat.value!.content,
+        )),
 );
 const pendingAction = computed(() =>
   pendingChat.value?.operation
@@ -173,7 +246,12 @@ function composerKeydown(event: KeyboardEvent) {
   )
     return;
   event.preventDefault();
-  if (!busy.value && !pendingChat.value && chatDraft.value.trim()) void send();
+  if (
+    !busy.value &&
+    !pendingChat.value &&
+    (chatDraft.value.trim() || draftFiles.value.length)
+  )
+    void send();
 }
 watch(chatDraft, () => void nextTick(resizeComposer));
 watch(composerInput, () => void nextTick(resizeComposer));
@@ -260,26 +338,18 @@ function ended() {
   goalDraft.value = "";
   chat.clear();
   clearData();
-  devices.value = [];
-  status.value = null;
   sourceDetail.value = null;
   chosenSources.value = [];
   sourceText.value = "";
   sourceUrl.value = "";
-  memoryText.value = "";
-  choice.value = "";
-  rationale.value = "";
-  outcome.value = "";
-  reviewDraft.value = {};
   mock.value = false;
 }
 function clearData() {
   messages.value = [];
   sources.value = [];
   memories.value = [];
-  topics.value = [];
-  discussions.value = [];
   decisions.value = [];
+  topics.value = [];
 }
 async function loadProblems() {
   problems.value = await list<Problem>("/problems");
@@ -300,24 +370,23 @@ async function load() {
   const assign = <T,>(target: { value: T }, value: T) => {
     if (g === generation && logged.value) target.value = value;
   };
-  if (section === "服务与观察") {
-    const [s, d] = await Promise.all([
-      request<Status>("/status"),
-      list<Device>("/devices"),
-    ]);
-    assign(status, s);
-    assign(devices, d);
+  if (section === "记忆") {
+    assign(memories, await list<Memory>("/memories"));
     return;
   }
   if (newProblem.value) return;
   if (!id) return;
   const q = `?problemId=${encodeURIComponent(id)}`;
   if (section === "讨论") {
-    const [m, s] = await Promise.all([
+    const [m, s, mem, dec] = await Promise.all([
       list<Message>(`/problems/${id}/messages`),
       list<Source>("/sources" + q),
+      list<Memory>("/memories" + q),
+      list<Decision>("/decisions" + q),
     ]);
     assign(messages, m);
+    assign(memories, mem);
+    assign(decisions, dec);
     assign(sources, s);
     if (g === generation) mock.value = m.some((x) => x.mode === "mock");
   }
@@ -329,11 +398,6 @@ async function load() {
     assign(sources, s);
     assign(topics, t);
   }
-  if (section === "记忆") assign(memories, await list<Memory>("/memories" + q));
-  if (section === "议题")
-    assign(discussions, await list<Discussion>("/discussions" + q));
-  if (section === "决定与复盘")
-    assign(decisions, await list<Decision>("/decisions" + q));
 }
 async function login() {
   await act(async () => {
@@ -380,13 +444,28 @@ async function job(path: string, body: unknown) {
   if (logged.value && selected.value === id) await load();
 }
 async function send() {
-  if (!chatDraft.value.trim() || pendingChat.value) return;
+  if (
+    (!chatDraft.value.trim() && !draftFiles.value.length) ||
+    pendingChat.value
+  )
+    return;
+  thinkingOpen.value = false;
   await act(() =>
     chat.send(
       newProblem.value ? null : selected.value || null,
       chosenSources.value,
     ),
   );
+}
+async function stopMissingMedia() {
+  if (
+    !confirm(
+      "此前请求可能已被服务端接收。停止本地等待后，请先查看历史，避免重复发送。继续？",
+    )
+  )
+    return;
+  chat.leaveMissingMedia();
+  await act(refresh);
 }
 async function ingest() {
   await act(async () => {
@@ -415,11 +494,12 @@ async function reanalyze() {
     }
   });
 }
-async function showSource(id: string) {
+async function showSource(id: string, quotes: Evidence[] = []) {
   await act(async () => {
     sourceDetail.value = await request<Source>(
       `/sources/${encodeURIComponent(id)}`,
     );
+    sourceQuotes.value = quotes;
   });
 }
 async function remove(path: string) {
@@ -441,66 +521,6 @@ async function changeMemory(m: Memory) {
     await load();
   });
 }
-async function discussionState(d: Discussion, state: string) {
-  await act(async () => {
-    await request(`/discussions/${d.id}`, "PATCH", {
-      status: state,
-      ...(state === "snoozed"
-        ? { snoozeUntil: new Date(Date.now() + 3600000).toISOString() }
-        : {}),
-    });
-    await load();
-  });
-}
-async function confirmDecision() {
-  await act(async () => {
-    await request("/decisions", "POST", {
-      problemId: selected.value,
-      choice: choice.value,
-      rationale: rationale.value,
-      expectedOutcome: outcome.value,
-      evidence: [],
-      ...(reviewAt.value
-        ? { reviewAt: new Date(reviewAt.value).toISOString() }
-        : {}),
-    });
-    choice.value = "";
-    rationale.value = "";
-    outcome.value = "";
-    reviewAt.value = "";
-    await load();
-  });
-}
-async function recordReview(d: Decision) {
-  await act(async () => {
-    await request(`/decisions/${d.id}/reviews`, "POST", {
-      ...reviewDraft.value[d.id],
-      evidence: [],
-    });
-    delete reviewDraft.value[d.id];
-    await load();
-  });
-}
-async function setDevice(d: Device, state: string) {
-  if (
-    state === "running" &&
-    !confirm(
-      "允许此设备同步观察？仍需在电脑本地明确运行并选择无敏感页面。原始截图由本地 Pensieve 管理。",
-    )
-  )
-    return;
-  await act(async () => {
-    await request(`/devices/${d.id}`, "PATCH", { desiredState: state });
-    await load();
-    note.value =
-      state === "paused"
-        ? "已请求暂停同步；底层采集状态未确认。"
-        : "已允许同步，等待本地明确启动。";
-  });
-}
-function evidenceText(e: Evidence) {
-  return `${e.relation === "supports" ? "支持" : e.relation === "contradicts" ? "相反依据" : "背景"}：${e.quote}`;
-}
 watch([selected, tab, newProblem], ([id], [old]) => {
   if (id !== old) {
     editingGoal.value = false;
@@ -511,23 +531,21 @@ watch([selected, tab, newProblem], ([id], [old]) => {
     sourceTitle.value = "";
     sourceText.value = "";
     sourceUrl.value = "";
-    memoryText.value = "";
-    choice.value = "";
-    rationale.value = "";
-    outcome.value = "";
-    reviewAt.value = "";
-    reviewDraft.value = {};
   }
   if (logged.value && !busy.value) void act(load);
 });
 onMounted(() => {
   window.addEventListener("session-ended", ended);
+  window.addEventListener("media-cleanup-error", cleanupFailure);
+  document.addEventListener("pointerdown", closeThinking);
   if (logged.value) void act(initialize);
 });
 onUnmounted(() => {
   generation++;
   chat.dispose();
   window.removeEventListener("session-ended", ended);
+  window.removeEventListener("media-cleanup-error", cleanupFailure);
+  document.removeEventListener("pointerdown", closeThinking);
 });
 </script>
 
@@ -557,7 +575,7 @@ onUnmounted(() => {
       :selected="selected"
       :new-problem="newProblem"
       :active-tab="tab"
-      :busy="busy"
+      :busy="busy || chat.preparing.value"
       :pending="!!pendingChat"
       @new="openNewProblem"
       @select="displayedProblem = $event"
@@ -668,36 +686,55 @@ onUnmounted(() => {
               >{{ m.role === "user" ? "你" : "决策助手" }}
               <b v-if="m.mode === 'mock'">· 测试替身</b></small
             >
+            <AttachmentList
+              v-if="m.attachments?.length"
+              :items="m.attachments"
+            />
+            <span
+              v-if="m.thinking && m.thinking !== 'off'"
+              class="thinking-tag"
+              >{{ thinkingLabel(m.thinking) }}</span
+            >
             <div
               v-if="m.role === 'assistant'"
               class="markdown-body"
               v-html="renderMarkdown(m.content)"
             />
             <p v-else class="pre">{{ m.content }}</p>
-            <details v-if="m.evidence.length || m.uncertainties.length">
-              <summary>查看依据与不确定性</summary>
-              <button
-                v-for="(e, i) in m.evidence"
-                :key="i"
-                class="evidence"
-                :disabled="busy"
-                @click="showSource(e.sourceId)"
-              >
-                {{ evidenceText(e) }}
-              </button>
-              <p v-for="u in m.uncertainties" :key="u">尚不确定：{{ u }}</p>
-            </details>
+            <ChatRecords
+              v-if="m.role === 'assistant'"
+              :message="m"
+              :memories="memories"
+              :decisions="decisions"
+            />
+            <EvidencePanel
+              :evidence="m.evidence"
+              :uncertainties="m.uncertainties"
+              :sources="sources"
+              :busy="busy"
+              @open="showSource"
+            />
           </article>
           <article v-if="showPendingSentence" class="message user">
             <small>你</small>
-            <p class="pre">{{ pendingChat!.content }}</p>
+            <AttachmentList
+              v-if="pendingChat?.files?.length"
+              :items="pendingChat.files"
+              local
+            />
+            <p v-if="pendingChat!.content" class="pre">
+              {{ pendingChat!.content }}
+            </p>
           </article>
           <div
             v-if="pendingChat && !busy"
             class="pending-recovery"
             role="status"
           >
-            <p v-if="pendingChat.state === 'stale'">
+            <p v-if="pendingChat.mediaUnavailable">
+              本机附件暂存已丢失，无法继续这次发送。此前的请求可能已收到，请先查看历史；停止等待不会重新发送或删除服务端记录。
+            </p>
+            <p v-else-if="pendingChat.state === 'stale'">
               原话还在。对话内容已有变化，请调整后再发。
             </p>
             <p
@@ -711,7 +748,16 @@ onUnmounted(() => {
               回答已经生成，正在恢复显示。
             </p>
             <p v-else>原话还在，可以接着获取回答。</p>
-            <button v-if="pendingChat.state === 'stale'" @click="editOriginal">
+            <button
+              v-if="pendingChat.mediaUnavailable"
+              @click="stopMissingMedia"
+            >
+              停止等待并查看历史
+            </button>
+            <button
+              v-else-if="pendingChat.state === 'stale'"
+              @click="editOriginal"
+            >
               调整原话
             </button>
             <button v-else @click="act(() => chat.resume(true))">
@@ -733,9 +779,42 @@ onUnmounted(() => {
             <form
               ref="composer"
               class="composer"
+              :class="{ 'dragging-files': draggingFiles }"
               aria-label="对话输入"
               @submit.prevent="send"
+              @paste="pasteAttachments"
+              @dragover="dragAttachments"
+              @dragleave="draggingFiles = false"
+              @drop="dropAttachments"
             >
+              <input
+                ref="fileInput"
+                type="file"
+                hidden
+                multiple
+                :accept="FILE_ACCEPT"
+                aria-label="选择图片或文件"
+                @change="fileChange"
+              />
+              <AttachmentList
+                :items="draftFiles"
+                local
+                removable
+                :disabled="busy || !!pendingChat"
+                @remove="
+                  (id) => {
+                    try {
+                      chat.removeFile(draftTarget, id);
+                    } catch (failure) {
+                      error =
+                        failure instanceof Error
+                          ? failure.message
+                          : '未能移除附件';
+                    }
+                  }
+                "
+              />
+              <p v-if="draggingFiles" class="drop-hint">松开以添加图片或文件</p>
               <label>
                 <span class="sr-only">说说你的问题</span
                 ><textarea
@@ -746,7 +825,6 @@ onUnmounted(() => {
                   @keydown="composerKeydown"
                   @compositionstart="composing = true"
                   @compositionend="composing = false"
-                  required
                   maxlength="12000"
                   :disabled="busy || !!pendingChat"
                   :placeholder="
@@ -755,6 +833,55 @@ onUnmounted(() => {
                 />
               </label>
               <div class="composer-actions">
+                <button
+                  type="button"
+                  class="icon-button attachment-add"
+                  aria-label="添加图片或文件"
+                  title="添加图片或文件 · 最多4个"
+                  :disabled="busy || !!pendingChat || chat.preparing.value"
+                  @click="fileInput?.click()"
+                >
+                  <Paperclip :size="19" />
+                </button>
+                <div
+                  ref="thinkingMenu"
+                  class="thinking-picker"
+                  @keydown.esc.prevent="thinkingOpen = false"
+                >
+                  <button
+                    type="button"
+                    class="thinking-trigger"
+                    aria-label="思考等级"
+                    :aria-expanded="thinkingOpen"
+                    :disabled="busy || !!pendingChat"
+                    @click="thinkingOpen = !thinkingOpen"
+                  >
+                    {{ thinkingLabel(selectedThinking)
+                    }}<ChevronDown :size="13" />
+                  </button>
+                  <div
+                    v-if="thinkingOpen"
+                    class="thinking-options"
+                    role="group"
+                    aria-label="选择思考等级"
+                  >
+                    <button
+                      v-for="option in thinkingOptions"
+                      :key="option.value"
+                      type="button"
+                      :aria-pressed="selectedThinking === option.value"
+                      @click="chooseThinking(option.value)"
+                    >
+                      <span
+                        >{{ option.label
+                        }}<small>{{ option.description }}</small></span
+                      ><Check
+                        v-if="selectedThinking === option.value"
+                        :size="15"
+                      />
+                    </button>
+                  </div>
+                </div>
                 <details
                   v-if="!newProblem && sources.length"
                   class="source-picker"
@@ -775,12 +902,16 @@ onUnmounted(() => {
                     >
                   </div>
                 </details>
-                <span v-else class="composer-key-hint">Shift + Enter 换行</span>
                 <button
                   class="send-button"
                   aria-label="发送"
                   :title="busy ? '正在处理' : '发送'"
-                  :disabled="busy || !!pendingChat || !chatDraft.trim()"
+                  :disabled="
+                    busy ||
+                    !!pendingChat ||
+                    chat.preparing.value ||
+                    (!chatDraft.trim() && !draftFiles.length)
+                  "
                 >
                   <LoaderCircle
                     v-if="busy"
@@ -858,48 +989,33 @@ onUnmounted(() => {
               :disabled="busy"
               @click="act(() => job(`/topics/${t.id}/sync`, {}))"
             >
-              同步 Wiki</button
-            ><button
-              v-for="(e, i) in t.evidence"
-              :key="i"
-              class="evidence"
-              :disabled="busy"
-              @click="showSource(e.sourceId)"
-            >
-              {{ evidenceText(e) }}
+              同步 Wiki
             </button>
+            <EvidencePanel
+              :evidence="t.evidence"
+              :sources="sources"
+              :busy="busy"
+              @open="showSource"
+            />
           </article>
         </template>
         <template v-else-if="tab === '记忆'">
-          <form
-            class="card"
-            @submit.prevent="
-              act(async () => {
-                await request('/memories', 'POST', {
-                  problemId: selected,
-                  content: memoryText,
-                  kind: 'user_reported',
-                });
-                memoryText = '';
-                await load();
-              })
-            "
-          >
-            <h2>补充本人陈述</h2>
-            <label
-              >希望记住的事实或偏好<textarea
-                v-model="memoryText"
-                required
-              /></label
-            ><button :disabled="busy || !memoryText.trim()">保存陈述</button>
-          </form>
-          <p v-if="!memories.length" class="muted">暂无记忆。</p>
-          <article v-for="m in memories" :key="m.id" class="card">
+          <h2>记住的事</h2>
+          <p class="muted">从聊天中积累。记错了，可以随时纠正或忘记。</p>
+          <p v-if="!memories.length" class="empty">
+            还没有记忆，照常聊天就好。
+          </p>
+          <article v-for="m in memories" :key="m.id" class="memory-row">
             <small
-              >{{ label(m.kind) }} · {{ label(m.status) }} · 版本
+              >{{ m.scope === "global" ? "跨对话" : "本次对话" }} ·
+              {{ label(m.kind) }} · {{ label(m.status) }} · 版本
               {{ m.revision }}</small
             >
             <p class="pre">{{ m.content }}</p>
+            <details v-if="m.sourceQuote" class="record-origin">
+              <summary>查看你的原话</summary>
+              <blockquote>{{ m.sourceQuote }}</blockquote>
+            </details>
             <button class="secondary" :disabled="busy" @click="changeMemory(m)">
               纠正
             </button>
@@ -916,192 +1032,21 @@ onUnmounted(() => {
                 })
               "
             >
-              撤销
+              忘记
             </button>
             <button
               class="danger"
               :disabled="busy"
               @click="remove(`/memories/${m.id}`)"
             >
-              删除</button
-            ><button
-              v-for="(e, i) in m.evidence"
-              :key="i"
-              class="evidence"
-              :disabled="busy"
-              @click="showSource(e.sourceId)"
-            >
-              {{ evidenceText(e) }}
+              删除
             </button>
-          </article>
-        </template>
-        <template v-else-if="tab === '议题'"
-          ><p class="muted">
-            值得再次想一想的事。没有议题，也可能意味着暂时无需打扰。
-          </p>
-          <article v-for="d in discussions" :key="d.id" class="card">
-            <small>{{ label(d.status) }}</small>
-            <h2>{{ d.title }}</h2>
-            <p class="pre">{{ d.reason }}</p>
-            <button
-              v-for="(e, i) in d.evidence"
-              :key="i"
-              class="evidence"
-              :disabled="busy"
-              @click="showSource(e.sourceId)"
-            >
-              {{ evidenceText(e) }}</button
-            ><button
-              class="secondary"
-              :disabled="busy"
-              @click="discussionState(d, 'read')"
-            >
-              已读
-            </button>
-            <button
-              class="secondary"
-              :disabled="busy"
-              @click="discussionState(d, 'snoozed')"
-            >
-              一小时后
-            </button>
-            <button
-              class="secondary"
-              :disabled="busy"
-              @click="discussionState(d, 'dismissed')"
-            >
-              忽略
-            </button>
-          </article>
-          <div v-if="!discussions.length" class="empty">暂无议题</div></template
-        >
-        <template v-else-if="tab === '决定与复盘'">
-          <form class="card" @submit.prevent="confirmDecision">
-            <h2>记录我的决定</h2>
-            <p>只有你确认后才记录，助手的建议不会自动成为决定。</p>
-            <label>我选择<input v-model="choice" required /></label
-            ><label>当时的理由<textarea v-model="rationale" required /></label
-            ><label>预期结果<textarea v-model="outcome" required /></label
-            ><label
-              >计划复盘时间（可选）<input
-                v-model="reviewAt"
-                type="datetime-local" /></label
-            ><button :disabled="busy">确认记录决定</button>
-          </form>
-          <article v-for="d in decisions" :key="d.id" class="card">
-            <small>{{ date(d.confirmedAt) }}</small>
-            <h2>{{ d.choice }}</h2>
-            <p class="pre">当时理由：{{ d.rationale }}</p>
-            <p class="pre">预期结果：{{ d.expectedOutcome }}</p>
-            <button
-              v-for="(e, i) in d.evidence"
-              :key="i"
-              class="evidence"
-              :disabled="busy"
-              @click="showSource(e.sourceId)"
-            >
-              {{ evidenceText(e) }}
-            </button>
-            <section v-for="r in d.reviews" :key="r.id" class="review">
-              <p>结果：{{ r.outcome }}</p>
-              <p>反思：{{ r.reflection }}</p>
-            </section>
-            <button
-              v-if="!reviewDraft[d.id]"
-              class="secondary"
-              @click="reviewDraft[d.id] = { outcome: '', reflection: '' }"
-            >
-              追加复盘
-            </button>
-            <form v-else @submit.prevent="recordReview(d)">
-              <label
-                >实际结果<textarea
-                  v-model="reviewDraft[d.id]!.outcome"
-                  required
-                /></label
-              ><label
-                >反思<textarea
-                  v-model="reviewDraft[d.id]!.reflection"
-                  required
-                /></label
-              ><button :disabled="busy">保存复盘</button>
-            </form>
-          </article>
-        </template>
-        <template v-else-if="tab === '服务与观察'">
-          <div v-if="status" class="columns">
-            <article class="card">
-              <h2>模型</h2>
-              <p>{{ status.model.configured ? "已配置" : "未配置" }}</p>
-              <p>最近调用：{{ status.model.lastCallStatus || "暂无" }}</p>
-              <p>
-                请求 {{ status.usage.requests }} · 输入
-                {{ status.usage.inputTokens }} / 输出
-                {{ status.usage.outputTokens }} tokens
-              </p>
-              <p>
-                费用估计：{{
-                  status.usage.costEstimate === null
-                    ? "暂无依据"
-                    : `${status.usage.costEstimate} ${status.usage.currency || ""}`
-                }}
-              </p>
-            </article>
-            <article class="card">
-              <h2>Wiki</h2>
-              <p>
-                {{ status.wiki.configured ? "已配置" : "未配置" }} ·
-                {{ label(status.wiki.status) }}
-              </p>
-              <p>观察最近在线：{{ date(status.observer.lastSeenAt) }}</p>
-            </article>
-          </div>
-          <h2>观察设备</h2>
-          <p>
-            默认关闭。网页授权同步后，仍须在本地明确启动。暂停同步不能证明底层录屏已经停止。
-          </p>
-          <p v-if="!devices.length" class="muted">
-            没有设备，请先在下方注册，再将凭据填入本地适配器。网页不会自动开启采集。
-          </p>
-          <DeviceRegistration
-            :disabled="busy"
-            @registered="
-              (device) => {
-                devices = [
-                  ...devices.filter((d) => d.id !== device.id),
-                  device,
-                ];
-              }
-            "
-          />
-          <article v-for="d in devices" :key="d.id" class="card">
-            <h3>{{ d.name }}</h3>
-            <p>
-              同步请求：{{ label(d.desiredState) }} · 设备报告：{{
-                label(d.reportedState)
-              }}
-            </p>
-            <p>心跳：{{ date(d.lastHeartbeatAt) }}</p>
-            <p
-              v-if="
-                !d.lastHeartbeatAt ||
-                Date.now() - Date.parse(d.lastHeartbeatAt) > 90000
-              "
-              class="error"
-            >
-              心跳已过期，设备可能离线，实际采集状态未知。
-            </p>
-            <p v-if="d.lastError" class="error">{{ d.lastError }}</p>
-            <button :disabled="busy" @click="setDevice(d, 'running')">
-              允许同步（仍需本地启动）
-            </button>
-            <button
-              class="secondary"
-              :disabled="busy"
-              @click="setDevice(d, 'paused')"
-            >
-              请求暂停同步
-            </button>
+            <EvidencePanel
+              :evidence="m.evidence"
+              :sources="sources"
+              :busy="busy"
+              @open="showSource"
+            />
           </article>
         </template>
       </div>
@@ -1117,6 +1062,20 @@ onUnmounted(() => {
       >
         <button class="secondary" @click="sourceDetail = null">关闭来源</button>
         <h2>{{ sourceDetail.title }}</h2>
+        <div v-if="sourceQuotes.length" class="source-quotes">
+          <h3>本次引用</h3>
+          <blockquote v-for="(entry, index) in sourceQuotes" :key="index">
+            <span class="citation-meta">{{
+              entry.relation === "supports"
+                ? "支持"
+                : entry.relation === "contradicts"
+                  ? "不同依据"
+                  : "背景"
+            }}</span>
+            <p class="pre">{{ entry.quote }}</p>
+          </blockquote>
+          <h3>来源全文</h3>
+        </div>
         <p>
           {{ label(sourceDetail.status) }} · {{ date(sourceDetail.capturedAt) }}
         </p>

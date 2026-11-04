@@ -8,9 +8,6 @@ import {
   MessageCircle,
   Library,
   Brain,
-  CircleHelp,
-  ClipboardCheck,
-  Settings2,
   LogOut,
   X,
 } from "@lucide/vue";
@@ -37,9 +34,6 @@ const tools = [
   { title: "讨论", icon: MessageCircle },
   { title: "资料与主题", icon: Library },
   { title: "记忆", icon: Brain },
-  { title: "议题", icon: CircleHelp },
-  { title: "决定与复盘", icon: ClipboardCheck },
-  { title: "服务与观察", icon: Settings2 },
 ];
 const isMobile = ref(false);
 const mobileOpen = ref(false);
@@ -219,14 +213,15 @@ defineExpose({ openMenu });
             class="icon-button"
             :aria-label="tool.title"
             :title="tool.title"
-            :aria-pressed="!newProblem && activeTab === tool.title"
-            :class="{ active: !newProblem && activeTab === tool.title }"
-            :disabled="
-              busy ||
-              (newProblem &&
-                tool.title !== '讨论' &&
-                tool.title !== '服务与观察')
+            :aria-pressed="
+              (tool.title !== '讨论' || !newProblem) && activeTab === tool.title
             "
+            :class="{
+              active:
+                (tool.title !== '讨论' || !newProblem) &&
+                activeTab === tool.title,
+            }"
+            :disabled="busy || (newProblem && tool.title === '资料与主题')"
             @click="navigate(() => emit('tool', tool.title))"
           >
             <component :is="tool.icon" :size="18" />

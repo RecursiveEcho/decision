@@ -1,5 +1,6 @@
 import type { Job } from "./types";
 import { clearChatSession } from "./chatStorage";
+import { clearMediaSession, purgeExpiredMedia } from "./mediaStorage";
 const SESSION = "decision.session";
 let sessionRequests = new AbortController();
 export class ApiError extends Error {
@@ -24,10 +25,33 @@ export function token(): string {
   }
 }
 export function setSession(s: { accessToken: string; expiresAt: string }) {
+  clearLocalMedia();
   clearChatSession();
   sessionStorage.setItem(
     SESSION,
     JSON.stringify({ ...s, localId: crypto.randomUUID() }),
+  );
+  void purgeExpiredMedia().catch(() => {});
+}
+function clearLocalMedia() {
+  try {
+    const owner = JSON.parse(
+      sessionStorage.getItem(SESSION) || "null",
+    )?.localId;
+    if (owner)
+      void clearMediaSession(owner).catch((error: Error) => {
+        if (typeof window !== "undefined")
+          window.dispatchEvent(
+            new CustomEvent("media-cleanup-error", { detail: error.message }),
+          );
+      });
+  } catch {
+    /* A malformed session has no usable media owner. */
+  }
+}
+export function sessionExpiry(): number {
+  return Date.parse(
+    JSON.parse(sessionStorage.getItem(SESSION) || "null")?.expiresAt || "",
   );
 }
 export function sessionId(): string {
@@ -41,6 +65,7 @@ export function sessionId(): string {
 }
 export function logout() {
   sessionRequests.abort();
+  clearLocalMedia();
   sessionRequests = new AbortController();
   sessionStorage.removeItem(SESSION);
   clearChatSession();
@@ -132,12 +157,40 @@ export async function list<T>(path: string): Promise<T[]> {
   } while (cursor);
   return items;
 }
+export async function attachmentBlob(id: string): Promise<Blob> {
+  const owner = sessionId(),
+    accessToken = token();
+  if (!owner) throw new ApiError("请先登录。", 401);
+  const response = await fetch(
+    `/api/v1/attachments/${encodeURIComponent(id)}`,
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+      signal: AbortSignal.any([
+        sessionRequests.signal,
+        AbortSignal.timeout(30000),
+      ]),
+    },
+  );
+  if (owner !== sessionId())
+    throw new ApiError("会话已结束，停止读取附件。", 499);
+  if (response.status === 401) {
+    logout();
+    throw new ApiError("登录已过期，请重新登录。", 401);
+  }
+  if (!response.ok)
+    throw new ApiError("附件暂时无法读取，请稍后重试。", response.status);
+  const blob = await response.blob();
+  if (owner !== sessionId())
+    throw new ApiError("会话已结束，停止读取附件。", 499);
+  return blob;
+}
 export async function waitJob(
   job: Job,
   active: () => boolean,
   update: (job: Job) => void,
 ): Promise<boolean> {
-  const deadline = Date.now() + 180000;
+  const deadline = Date.now() + 360000;
   while (active()) {
     update(job);
     if (job.status === "succeeded") return true;

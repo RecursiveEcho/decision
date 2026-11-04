@@ -1,12 +1,22 @@
 import { ref } from "vue";
-import { ApiError, request, sessionId, waitJob } from "./api";
+import { ApiError, request, sessionId, sessionExpiry, waitJob } from "./api";
 import {
   clearChatSession,
   readChatSession,
   writeChatSession,
   type PendingChat,
 } from "./chatStorage";
-import type { Job, Problem } from "./types";
+import type { Job, Problem, Thinking } from "./types";
+import {
+  getMedia,
+  putMedia,
+  deleteMedia,
+  MissingMediaError,
+  localMetadata,
+  type LocalFile,
+  type StoredFile,
+} from "./mediaStorage";
+import { checkFileLimits, prepareFile, toDataUrl } from "./attachments";
 
 export function useChatFlow(callbacks: {
   accepted: (id: string, problem?: Problem) => void;
@@ -14,6 +24,10 @@ export function useChatFlow(callbacks: {
 }) {
   const pending = ref<PendingChat | null>(null);
   const drafts = ref<Record<string, string>>({});
+  const files = ref<Record<string, LocalFile[]>>({});
+  const thinking = ref<Record<string, Thinking>>({});
+  const preparing = ref(false);
+  let stagingSend = false;
   let owner = "",
     disposed = false;
   const active = (p: PendingChat) =>
@@ -21,13 +35,88 @@ export function useChatFlow(callbacks: {
   function save() {
     if (!owner || owner !== sessionId())
       throw new ApiError("已退出登录，停止等待请求。", 499);
-    writeChatSession({ owner, drafts: drafts.value, pending: pending.value });
+    writeChatSession({
+      owner,
+      drafts: drafts.value,
+      pending: pending.value,
+      files: files.value,
+      thinking: thinking.value,
+    });
   }
   function restore() {
     owner = sessionId();
     const stored = readChatSession(owner);
     drafts.value = stored.drafts;
     pending.value = stored.pending;
+    files.value = stored.files || {};
+    thinking.value = stored.thinking || {};
+  }
+  function validOwner(value: string) {
+    return !disposed && !!value && owner === value && sessionId() === value;
+  }
+  function release(ids: string[]) {
+    const capturedOwner = owner;
+    const referenced = new Set(
+      Object.values(files.value)
+        .flat()
+        .map((file) => file.id),
+    );
+    for (const file of pending.value?.files || []) referenced.add(file.id);
+    if (pending.value?.mediaKey) referenced.add(pending.value.mediaKey);
+    void deleteMedia(
+      capturedOwner,
+      ids.filter((id) => !referenced.has(id)),
+      () => validOwner(capturedOwner),
+    ).catch(() => {
+      if (validOwner(capturedOwner))
+        window.dispatchEvent(
+          new CustomEvent("media-cleanup-error", {
+            detail: "部分本机附件缓存未能清理，退出时将再次清理。",
+          }),
+        );
+    });
+  }
+  const mediaIds = (p: PendingChat) => [
+    ...(p.files || []).map((file) => file.id),
+    ...(p.mediaKey ? [p.mediaKey] : []),
+  ];
+  async function addFiles(target: string, incoming: File[]) {
+    if (preparing.value || pending.value || stagingSend)
+      throw new Error("附件正在处理，请稍等。");
+    const currentOwner = owner;
+    const current = files.value[target] || [];
+    checkFileLimits([...current, ...incoming]);
+    preparing.value = true;
+    try {
+      const prepared: StoredFile[] = [];
+      for (const file of incoming) {
+        prepared.push(await prepareFile(file));
+        if (!validOwner(currentOwner)) throw new ApiError("会话已结束。", 499);
+      }
+      checkFileLimits([...current, ...prepared]);
+      for (const file of prepared)
+        await putMedia(currentOwner, file.id, [file], sessionExpiry(), () =>
+          validOwner(currentOwner),
+        );
+      if (!validOwner(currentOwner)) throw new ApiError("会话已结束。", 499);
+      files.value[target] = [...current, ...prepared.map(localMetadata)];
+      save();
+    } finally {
+      preparing.value = false;
+    }
+  }
+  function removeFile(target: string, id: string) {
+    if (pending.value || preparing.value || stagingSend) return;
+    files.value[target] = (files.value[target] || []).filter(
+      (file) => file.id !== id,
+    );
+    save();
+    release([id]);
+  }
+  function setThinking(target: string, value: Thinking) {
+    if (pending.value || stagingSend) return;
+    thinking.value[target] = value;
+    save();
   }
   function setDraft(target: string, value: string) {
     drafts.value[target] = value;
@@ -37,6 +126,8 @@ export function useChatFlow(callbacks: {
     owner = "";
     pending.value = null;
     drafts.value = {};
+    files.value = {};
+    thinking.value = {};
     clearChatSession();
   }
   async function finish(p: PendingChat) {
@@ -47,6 +138,7 @@ export function useChatFlow(callbacks: {
     if (active(p)) {
       pending.value = null;
       save();
+      release(mediaIds(p));
     }
   }
   async function observe(p: PendingChat, reload = false) {
@@ -83,10 +175,27 @@ export function useChatFlow(callbacks: {
     // Save both initial and retry operations before any write, including their immutable payload/key.
     save();
     try {
+      let body: unknown = op.body;
+      if (op.attachmentSnapshotKey) {
+        const capturedOwner = owner;
+        const snapshot = await getMedia(
+          capturedOwner,
+          op.attachmentSnapshotKey,
+          () => active(p),
+        );
+        const attachments = await Promise.all(
+          snapshot.map(async (file) => ({
+            name: file.name,
+            dataUrl: await toDataUrl(file.blob),
+          })),
+        );
+        if (!active(p)) return;
+        body = { ...op.body, attachments };
+      }
       const result = await request<Job | { problem: Problem; job: Job }>(
         op.path,
         "POST",
-        op.body,
+        body,
         op.key,
       );
       if (!active(p)) return;
@@ -98,6 +207,7 @@ export function useChatFlow(callbacks: {
         p.job = result;
         callbacks.accepted(p.problemId!);
       }
+      if (p.problemId) thinking.value[p.problemId] = p.thinking || "off";
       p.operation = undefined;
       p.state = "waiting";
       save();
@@ -106,7 +216,14 @@ export function useChatFlow(callbacks: {
       await observe(p);
     } catch (e) {
       if (!active(p)) return;
-      if (e instanceof ApiError && e.code === "JOB_NOT_RETRYABLE" && p.job) {
+      if (e instanceof MissingMediaError) {
+        p.mediaUnavailable = true;
+        save();
+      } else if (
+        e instanceof ApiError &&
+        e.code === "JOB_NOT_RETRYABLE" &&
+        p.job
+      ) {
         p.operation = undefined;
         save();
         const current = await request<Job>(`/jobs/${p.job.id}`);
@@ -127,24 +244,57 @@ export function useChatFlow(callbacks: {
     }
   }
   async function send(targetId: string | null, sourceIds: string[] = []) {
-    if (pending.value)
+    if (pending.value || stagingSend)
       throw new Error("上一段话还在处理中，请先恢复或重试回答。");
     const target = targetId || "new";
     const content = drafts.value[target] || "";
-    if (!content.trim() || content.length > 12000)
+    const selectedFiles = [...(files.value[target] || [])];
+    const selectedThinking = thinking.value[target] || "off";
+    if ((!content.trim() && !selectedFiles.length) || content.length > 12000)
       throw new Error("请写一句想聊的话，最多12000字。");
+    if (preparing.value) throw new Error("附件正在处理，请稍等。");
+    const key = crypto.randomUUID();
+    if (selectedFiles.length) {
+      stagingSend = true;
+      preparing.value = true;
+      const capturedOwner = owner;
+      try {
+        const originals = (
+          await Promise.all(
+            selectedFiles.map((file) =>
+              getMedia(capturedOwner, file.id, () => validOwner(capturedOwner)),
+            ),
+          )
+        ).flat();
+        checkFileLimits(originals);
+        await putMedia(capturedOwner, key, originals, sessionExpiry(), () =>
+          validOwner(capturedOwner),
+        );
+        if (!validOwner(capturedOwner)) throw new ApiError("会话已结束。", 499);
+      } finally {
+        stagingSend = false;
+        preparing.value = false;
+      }
+    }
     pending.value = {
       content,
+      files: selectedFiles,
+      thinking: selectedThinking,
+      ...(selectedFiles.length ? { mediaKey: key } : {}),
       problemId: targetId,
       state: "sending",
       operation: {
         path: targetId ? `/problems/${targetId}/messages` : "/conversations",
-        key: crypto.randomUUID(),
-        body: targetId ? { content, sourceIds } : { content },
+        key,
+        ...(selectedFiles.length ? { attachmentSnapshotKey: key } : {}),
+        body: targetId
+          ? { content, sourceIds, thinking: selectedThinking }
+          : { content, thinking: selectedThinking },
       },
     };
     save();
     drafts.value[target] = "";
+    files.value[target] = [];
     save();
     await perform(pending.value);
   }
@@ -169,8 +319,11 @@ export function useChatFlow(callbacks: {
     const p = pending.value;
     if (!p || p.state !== "stale") return;
     drafts.value[p.problemId || "new"] = p.content;
+    files.value[p.problemId || "new"] = p.files || [];
+    thinking.value[p.problemId || "new"] = p.thinking || "off";
     pending.value = null;
     save();
+    if (p.mediaKey) release([p.mediaKey]);
   }
   function leaveFinished() {
     const p = pending.value;
@@ -184,10 +337,25 @@ export function useChatFlow(callbacks: {
     // This only releases local waiting state. The original sentence remains in server history.
     pending.value = null;
     save();
+    release(mediaIds(p));
+  }
+  function leaveMissingMedia() {
+    const p = pending.value;
+    if (!p?.mediaUnavailable) return;
+    // Explicitly dismiss waiting only; never restore as a new write or change its idempotency key.
+    pending.value = null;
+    save();
+    release(mediaIds(p));
   }
   return {
     pending,
     drafts,
+    files,
+    thinking,
+    preparing,
+    addFiles,
+    removeFile,
+    setThinking,
     restore,
     setDraft,
     clear,
@@ -195,6 +363,7 @@ export function useChatFlow(callbacks: {
     resume,
     editOriginal,
     leaveFinished,
+    leaveMissingMedia,
     dispose: () => {
       disposed = true;
     },
