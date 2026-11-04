@@ -83,6 +83,7 @@ class Store:
           CREATE TABLE IF NOT EXISTS seen (id TEXT PRIMARY KEY, recorded REAL NOT NULL);
           CREATE TABLE IF NOT EXISTS content_cursor (problem TEXT PRIMARY KEY, hash TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, status TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS notification_generation (id TEXT PRIMARY KEY, generation TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS notification_retry (id TEXT PRIMARY KEY, attempts INTEGER NOT NULL, next_at REAL NOT NULL);
         ''')
 
@@ -140,6 +141,11 @@ def atomic_json(path, value):
     os.replace(tmp, path)
 
 
+def truncate_utf16(text, units):
+    """Match Java length limits without splitting a Unicode code point."""
+    return text.encode('utf-16-le')[:units * 2].decode('utf-16-le', errors='ignore')
+
+
 def observation(entity, config, problem, since, now):
     # Pensieve returns naive local timestamps; the selected IANA zone is explicit.
     captured = datetime.fromisoformat(entity['file_created_at'].replace('Z', '+00:00'))
@@ -159,11 +165,11 @@ def observation(entity, config, problem, since, now):
                      and isinstance(x.get('rec_txt'), str)).strip()
     if not text:
         return None
-    text = text[:20000]
+    text = truncate_utf16(text, 20000)
     entity_id = int(entity['id'])
     library_id = int(config['libraryId'])
     return {'externalId': f'pensieve:{library_id}:{entity_id}', 'problemId': problem,
-            'text': text, 'appName': str(meta.get('active_app', 'unknown'))[:200],
+            'text': text, 'appName': truncate_utf16(str(meta.get('active_app', 'unknown')), 200),
             'capturedAt': captured.isoformat(), 'extractionMethod': 'ocr',
             'sourceLocator': {'resourceId': f'pensieve:library:{library_id}', 'frameId': f'pensieve:entity:{entity_id}'},
             'contentHash': hashlib.sha256(text.encode()).hexdigest()}
@@ -315,6 +321,15 @@ class Runner:
         for item in response['items']:
             delivery, discussion = item['delivery'], item['discussion']
             ident = str(uuid.UUID(delivery['id']))
+            old_generation = self.store.db.execute('SELECT generation FROM notification_generation WHERE id=?', (ident,)).fetchone()
+            incoming = delivery.get('updatedAt', 'legacy')
+            generation = old_generation[0] if old_generation else incoming
+            if old_generation is None or (delivery.get('status') == 'pending' and incoming != generation):
+                generation = incoming
+                with self.store.db:
+                    self.store.db.execute('INSERT OR REPLACE INTO notification_generation VALUES (?,?)', (ident, generation))
+                    self.store.db.execute('DELETE FROM notifications WHERE id=?', (ident,))
+                    self.store.db.execute('DELETE FROM notification_retry WHERE id=?', (ident,))
             previous = self.store.db.execute('SELECT status FROM notifications WHERE id=?', (ident,)).fetchone()
             status = previous[0] if previous else None
             if status != 'sent':
@@ -336,7 +351,7 @@ class Runner:
                         self.store.db.execute('DELETE FROM notification_retry WHERE id=?', (ident,))
             self.api.request('POST', f'/deliveries/{ident}/ack',
                 {'status': status, 'error': None if status == 'sent' else 'Desktop notification failed'},
-                key=str(uuid.uuid5(uuid.NAMESPACE_URL, ident + status)))
+                key=str(uuid.uuid5(uuid.NAMESPACE_URL, ident + status + generation)))
         self.delivery_cursor = response.get('nextCursor')
 
     def run(self, resume=False):
