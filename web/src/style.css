@@ -132,6 +132,19 @@
   padding-top: 9px;
   overflow-wrap: anywhere;
 }
+.knowledge-read-scope {
+  margin: 16px 0;
+  padding: 10px 12px;
+  border-left: 2px solid #e1e7e2;
+  background: #fafbf9;
+  font-size: 12px;
+}
+.knowledge-read-scope p {
+  margin: 3px 0 8px;
+}
+.knowledge-read-scope .knowledge-coverage {
+  margin: 6px 0 0;
+}
 .knowledge-library {
   margin-bottom: 32px;
   padding-bottom: 26px;
