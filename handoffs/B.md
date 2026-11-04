@@ -222,3 +222,9 @@ E复核最新全文/截图，确认本轮事实草稿、自动命名、无建档
 独立临时标签拦截所有写请求的故障验证：IME确认Enter不发送，Shift+Enter换行；14行草稿切工具回讨论仍200px且原文保留；普通Enter发起请求但全部在浏览器拦截，3次相同key、未知结果禁新对话/历史、退出清暂存，serverWrites0。明确长回答替身另验证自动跟随底部remaining0.5px、等待中真实wheel上翻后top0不强拉；修复了粘附输入后的scrollIntoView失效及异步刷新跟随竞态，采用主容器滚动+用户交互计数与禁自动锚定。替身不计模型验证，临时标签均清路由/会话并关闭。
 
 E已亲自看新版桌面空态/历史/折叠/390历史/抽屉，整体视觉通过；并加深输入placeholder和关键指引。最终截图本机忽略目录redesign-empty-desktop.png、redesign-history-desktop.png、redesign-history-collapsed.png、redesign-history-mobile.png、redesign-drawer-mobile.png、redesign-empty-mobile.png、redesign-mobile-end-evidence.png。不提交截图或真实记录。B末轮独立只读代码审查通过；待E集成部署后仅验证新资源、折叠/历史、一工具页和窄屏，不重跑模型/后端/旧全流程。用户旧窗口及IAB8088未动。
+
+### 新界面生产收拢（2026-11-04 21:23）
+
+E部署cddb75f并确认根npm ci/28测试/build及资源逐字节匹配后，B完成唯一一轮8088只读检查：实际index-DuoSLn3Y.js；空态1输入/0旧消息；真实合成历史Markdown标题正常、折叠rail宽56px；资料与主题工具页可达并返回讨论；390抽屉切历史正常，长正文与展开依据底637.6px、dock顶657.5px且无横向溢出。全程业务写请求0，未调用模型。最终截图final-production-empty-desktop.png、final-production-empty-mobile.png、final-production-drawer-mobile.png、final-production-history-mobile.png与redesign-production-evidence.json仅留本机忽略目录。
+
+已退出并清除自有开发/生产会话和草稿、Cookie、page/context routes，body锁滚清除、viewportSize=null，关闭decision-b-redesign；参考浏览器decision-b-designref和临时替身标签此前已清理关闭，B独立5173 Vite预览进程已停止。用户旧window与IAB8088未操作。B本轮全部实现、自检、推送和回执收拢，不再追加模型或旧流程重复验证。
