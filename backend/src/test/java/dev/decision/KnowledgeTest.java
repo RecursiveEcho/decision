@@ -40,6 +40,7 @@ class KnowledgeTest {
   @Autowired Config c;
   @Autowired Worker worker;
   @Autowired Knowledge knowledge;
+  @Autowired Model model;
   String owner;
 
   @BeforeEach
@@ -164,6 +165,7 @@ class KnowledgeTest {
     final HttpServer server;
     final AtomicInteger calls = new AtomicInteger();
     volatile JsonNode input;
+    volatile JsonNode payload;
 
     Gateway(Function<JsonNode, ObjectNode> answer) throws Exception {
       server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -171,7 +173,7 @@ class KnowledgeTest {
           "/chat/completions",
           exchange -> {
             try {
-              JsonNode payload =
+              payload =
                   Json.parse(
                       new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
               input = Json.parse(payload.path("messages").get(1).path("content").asText());
@@ -268,6 +270,14 @@ class KnowledgeTest {
     try (Gateway gateway =
         new Gateway(in -> candidate(in, "merge", "查询可重试；有幂等键的写入可重试，不可幂等写入不能盲目重试。"))) {
       JsonNode proposal = prepare(second);
+      String systemPrompt = gateway.payload.path("messages").get(0).path("content").asText();
+      assertTrue(systemPrompt.contains("未提及不等于不存在或禁止"));
+      assertTrue(systemPrompt.contains("不能推出该场景不采用B，也不能推出其他场景不得采用A"));
+      assertTrue(systemPrompt.contains("保留仍成立的已确认条件和未知"));
+      assertTrue(systemPrompt.contains("新的推理必须在相应正文处标为建议或待确认"));
+      assertTrue(
+          gateway.input.path("knowledge").get(0).path("markdown").asText().contains("写入需考虑幂等"),
+          "Prior confirmed conditions must reach the model along with the new discussion");
       assertEquals(1, proposal.path("coverage").path("knowledgeConsidered").asInt());
       id = accept(proposal, 200).path("entryId").asText();
       assertEquals(2, s.get("knowledge_entry", id).path("revision").asInt());
@@ -453,6 +463,38 @@ class KnowledgeTest {
       assertEquals(1, available.path("entries").size());
       assertTrue(available.path("pendingProposal").isNull());
       assertTrue(available.path("notice").asText().contains("不是已证实事实"));
+    }
+    message(p, "合成：补充新的适用条件。");
+    try (Gateway gateway = new Gateway(in -> candidate(in, "merge", "讨论结论与新条件"))) {
+      prepare(p);
+    }
+    s.write(
+        () -> {
+          ObjectNode entry = s.all("knowledge_entry", null).get(0);
+          entry.put("revision", 2);
+          s.save("knowledge_entry", entry);
+          return null;
+        });
+    try (Gateway gateway =
+        new Gateway(
+            in ->
+                Json.obj(
+                    "content",
+                    "可以讨论内容变化，再重新整理。",
+                    "evidence",
+                    Json.arr(),
+                    "uncertainties",
+                    Json.arr()))) {
+      model.call(model.context(p, Json.obj("content", "请帮我对照已有内容")), false);
+      JsonNode supplied = gateway.input.path("untrustedKnowledge");
+      assertEquals(2, supplied.path("entries").get(0).path("revision").asInt());
+      assertEquals("pending", supplied.path("pendingProposal").path("status").asText());
+      assertTrue(supplied.path("pendingProposal").path("requiresRefresh").asBoolean());
+      assertEquals(2, supplied.path("pendingProposal").path("targetCurrentRevision").asInt());
+      String systemPrompt = gateway.payload.path("messages").get(0).path("content").asText();
+      assertTrue(systemPrompt.contains("版本增长只是正常历史"));
+      assertTrue(systemPrompt.contains("不抛内部UUID、revision或版本核对作业"));
+      assertTrue(systemPrompt.contains("说明已有内容更新、需重新整理提案即可"));
     }
   }
 
