@@ -267,6 +267,9 @@ summary {
   outline: 3px solid #95b4a1;
   outline-offset: 2px;
 }
+.new-problem-form {
+  scroll-margin-top: 24px;
+}
 @media (max-width: 760px) {
   .shell {
     display: block;

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   ApiError,
   list,
@@ -63,6 +63,16 @@ const sourceDetail = ref<Source | null>(null),
 const reviewDraft = ref<
   Record<string, { outcome: string; reflection: string }>
 >({});
+const newProblemForm = ref<HTMLFormElement | null>(null);
+const newProblemTitle = ref<HTMLInputElement | null>(null);
+const errorBanner = ref<HTMLDivElement | null>(null);
+async function openNewProblem() {
+  if (busy.value) return;
+  newProblem.value = true;
+  await nextTick();
+  newProblemForm.value?.scrollIntoView({ block: "start", behavior: "auto" });
+  newProblemTitle.value?.focus({ preventScroll: true });
+}
 let generation = 0;
 const safeUrl = (value: string | null) => {
   try {
@@ -107,6 +117,10 @@ async function act(fn: () => Promise<void>) {
     note.value = "";
     if (!(e instanceof ApiError && e.status === 499))
       error.value = e instanceof Error ? e.message : "操作失败";
+    if (newProblem.value && error.value) {
+      await nextTick();
+      errorBanner.value?.scrollIntoView({ block: "nearest", behavior: "auto" });
+    }
   } finally {
     busy.value = false;
   }
@@ -419,7 +433,13 @@ onUnmounted(() => {
             {{ p.title }}
           </option>
         </select></label
-      ><button class="secondary" @click="newProblem = true" :disabled="busy">
+      ><button
+        class="secondary"
+        @click="openNewProblem"
+        :disabled="busy"
+        :aria-expanded="newProblem"
+        aria-controls="new-problem-form"
+      >
         ＋ 新建问题
       </button>
       <nav>
@@ -447,15 +467,29 @@ onUnmounted(() => {
           刷新
         </button>
       </header>
-      <div v-if="error" role="alert" class="error">{{ error }}</div>
+      <div v-if="error" ref="errorBanner" role="alert" class="error">
+        {{ error }}
+      </div>
       <div v-if="note" role="status" class="notice">{{ note }}</div>
       <div v-if="mock" class="error">
         当前包含测试替身（mock）结果，不代表真实模型验证。
       </div>
       <div v-if="busy" role="status" class="muted">正在处理…</div>
-      <form v-if="newProblem" class="card" @submit.prevent="createProblem">
+      <form
+        v-if="newProblem"
+        id="new-problem-form"
+        ref="newProblemForm"
+        class="card new-problem-form"
+        aria-label="新建问题"
+        @submit.prevent="createProblem"
+      >
         <h2>新建问题</h2>
-        <label>问题标题<input v-model="title" required maxlength="200" /></label
+        <label
+          >问题标题<input
+            ref="newProblemTitle"
+            v-model="title"
+            required
+            maxlength="200" /></label
         ><label>希望达到的目标<textarea v-model="goal" required /></label>
         <div class="columns">
           <label>限制条件（每行一条）<textarea v-model="constraints" /></label
