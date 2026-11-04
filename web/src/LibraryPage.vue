@@ -206,6 +206,7 @@ function selectRelated(id: string) {
 async function refreshKnowledge() {
   await reader.load();
 }
+defineExpose({ refresh: reader.refresh });
 watch(visible, (values) => {
   if (current.value) return;
   detailOpen.value = false;

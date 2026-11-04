@@ -100,6 +100,8 @@ export function useLibraryReader() {
   let generation = 0,
     selection = 0,
     loadRequest = 0;
+  let selectedKind: LibraryKind | null = null,
+    selectedId = "";
   const active = (g: number, owner: string, s?: number) =>
     g === generation &&
     !!owner &&
@@ -125,6 +127,8 @@ export function useLibraryReader() {
     }
   }
   async function open(kind: LibraryKind, id: string) {
+    selectedKind = kind;
+    selectedId = id;
     const g = generation,
       s = ++selection,
       owner = sessionId();
@@ -165,10 +169,21 @@ export function useLibraryReader() {
       if (active(g, owner, s)) reading.value = false;
     }
   }
+  async function refresh() {
+    const g = generation,
+      s = selection,
+      owner = sessionId(),
+      kind = selectedKind,
+      id = selectedId;
+    await load();
+    if (active(g, owner, s) && kind && id) await open(kind, id);
+  }
   function stop() {
     generation++;
     selection++;
     loadRequest++;
+    selectedKind = null;
+    selectedId = "";
     entries.value = [];
     source.value = null;
     knowledge.value = null;
@@ -188,6 +203,7 @@ export function useLibraryReader() {
     error,
     knowledgeError,
     load,
+    refresh,
     open,
     stop,
   };

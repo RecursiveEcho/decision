@@ -215,3 +215,41 @@ it("all library navigation is GET only, including current knowledge and history"
   expect(api.request.mock.calls.every((call) => call.length === 1)).toBe(true);
   expect(api.list.mock.calls).toEqual([["/knowledge-entries"]]);
 });
+it("a successful top-level refresh updates both the knowledge index and the selected body/history", async () => {
+  const original = entry("k"),
+    updated = { ...entry("k"), revision: 4, markdown: "更新后的合成正文" };
+  api.list.mockResolvedValue([updated]);
+  api.request
+    .mockResolvedValueOnce(original)
+    .mockResolvedValueOnce({ items: [] })
+    .mockResolvedValueOnce(updated)
+    .mockResolvedValueOnce({ items: [original] });
+  const reader = useLibraryReader();
+  await reader.open("knowledge", "k");
+  await reader.refresh();
+  expect(reader.entries.value[0].revision).toBe(4);
+  expect(reader.knowledge.value?.markdown).toBe("更新后的合成正文");
+  expect(reader.history.value[0].revision).toBe(3);
+});
+it("a user selection during refresh is kept and is not replaced by the pre-refresh selection", async () => {
+  let finish!: (v: KnowledgeEntry[]) => void;
+  api.list.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  api.request
+    .mockResolvedValueOnce(entry("old"))
+    .mockResolvedValueOnce({ items: [] })
+    .mockResolvedValueOnce(source("new"));
+  const reader = useLibraryReader();
+  await reader.open("knowledge", "old");
+  const refresh = reader.refresh();
+  await reader.open("source", "new");
+  finish([entry("old")]);
+  await refresh;
+  expect(reader.source.value?.id).toBe("new");
+  expect(reader.knowledge.value).toBeNull();
+  expect(api.request.mock.calls).toHaveLength(3);
+});

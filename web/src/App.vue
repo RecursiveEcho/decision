@@ -49,6 +49,7 @@ const logged = ref(!!token()),
   note = ref(""),
   mock = ref(false);
 const sidebar = ref<InstanceType<typeof AppSidebar> | null>(null);
+const libraryPage = ref<InstanceType<typeof LibraryPage> | null>(null);
 const sidebarCollapsed = ref(false);
 const sidebarModal = ref(false);
 const composing = ref(false);
@@ -378,8 +379,16 @@ async function loadProblems() {
     selected.value = problems.value[0]?.id || "";
 }
 async function refresh() {
+  const currentLibrary = libraryPage.value;
   await loadProblems();
   await load();
+  if (
+    logged.value &&
+    tab.value === "资料与主题" &&
+    currentLibrary &&
+    currentLibrary === libraryPage.value
+  )
+    await currentLibrary.refresh();
 }
 async function load() {
   const g = ++generation,
@@ -989,6 +998,7 @@ onUnmounted(() => {
           </div>
         </template>
         <LibraryPage
+          ref="libraryPage"
           v-else-if="tab === '资料与主题'"
           :sources="sources"
           :topics="topics"
