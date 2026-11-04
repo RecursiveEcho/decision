@@ -75,6 +75,27 @@ describe("API boundary", () => {
     expect(ended).toHaveBeenCalledOnce();
     expect(fetch).toHaveBeenCalledOnce();
   });
+  it("logout and a new login clear knowledge recovery metadata", () => {
+    sessionStorage.setItem(
+      "decision.knowledge-operations",
+      "synthetic pending metadata",
+    );
+    logout();
+    expect(
+      sessionStorage.getItem("decision.knowledge-operations"),
+    ).toBeUndefined();
+    sessionStorage.setItem(
+      "decision.knowledge-operations",
+      "synthetic old metadata",
+    );
+    setSession({
+      accessToken: "test-only",
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+    });
+    expect(
+      sessionStorage.getItem("decision.knowledge-operations"),
+    ).toBeUndefined();
+  });
   it("does not replay POST on server failure", async () => {
     const fetch = vi
       .fn()

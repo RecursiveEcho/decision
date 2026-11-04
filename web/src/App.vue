@@ -5,6 +5,7 @@ import {
   list,
   logout,
   request,
+  sessionId,
   setSession,
   token,
   waitJob,
@@ -14,6 +15,9 @@ import EvidencePanel from "./EvidencePanel.vue";
 import AttachmentList from "./AttachmentList.vue";
 import ChatRecords from "./ChatRecords.vue";
 import MemoryPage from "./MemoryPage.vue";
+import KnowledgeConversation from "./KnowledgeConversation.vue";
+import KnowledgeLibrary from "./KnowledgeLibrary.vue";
+import { readKnowledgeOperations } from "./knowledgeStorage";
 import { useMemoryOverview } from "./memoryOverview";
 import {
   ArrowUp,
@@ -280,6 +284,11 @@ async function editOriginal() {
   await nextTick();
   composerInput.value?.focus();
 }
+async function continueKnowledgeDiscussion() {
+  await nextTick();
+  composerInput.value?.focus({ preventScroll: true });
+  composer.value?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
 async function leaveConversation() {
   chat.leaveFinished();
   await openNewProblem();
@@ -431,9 +440,13 @@ async function login() {
 async function initialize() {
   chat.restore();
   tab.value = "讨论";
-  newProblem.value = !pendingChat.value?.problemId;
-  if (pendingChat.value?.problemId)
-    selected.value = pendingChat.value.problemId;
+  const restoringKnowledgeId = [
+    ...readKnowledgeOperations(sessionId()).keys(),
+  ].at(-1);
+  const restoringProblemId =
+    pendingChat.value?.problemId || restoringKnowledgeId;
+  newProblem.value = !restoringProblemId;
+  if (restoringProblemId) selected.value = restoringProblemId;
   await loadProblems();
   await load();
   if (
@@ -817,6 +830,14 @@ onUnmounted(() => {
               先聊别的
             </button>
           </div>
+          <KnowledgeConversation
+            v-if="!newProblem && problem && messages.length"
+            :problem-id="problem.id"
+            :disabled="busy || !!pendingChat || chat.preparing.value"
+            @source="showSource"
+            @discuss="continueKnowledgeDiscussion"
+            @library="tab = '资料与主题'"
+          />
           <div class="composer-dock">
             <form
               ref="composer"
@@ -967,6 +988,11 @@ onUnmounted(() => {
           </div>
         </template>
         <template v-else-if="tab === '资料与主题'">
+          <KnowledgeLibrary
+            :disabled="busy || !!pendingChat"
+            @source="showSource"
+            @conversation="openSourceConversation"
+          />
           <p v-if="!knowledgeProblemId" class="muted">
             全部资料 · 来自各个对话
           </p>
