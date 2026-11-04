@@ -3,9 +3,12 @@ package dev.decision;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.servlet.http.HttpServletRequest;
+import java.nio.charset.StandardCharsets;
 import java.time.*;
 import java.util.*;
 import java.util.function.Supplier;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -145,7 +148,25 @@ class Api {
       @PathVariable String id,
       @RequestParam(required = false) String cursor,
       @RequestParam(defaultValue = "30") int limit) {
-    return d.page(d.list("message", id), "createdAt", cursor, limit, "messages:" + id);
+    List<ObjectNode> messages = d.list("message", id);
+    messages.forEach(d.attachments::hydrate);
+    return d.page(messages, "createdAt", cursor, limit, "messages:" + id);
+  }
+
+  @GetMapping("/attachments/{id}")
+  ResponseEntity<byte[]> attachment(@PathVariable String id) {
+    Attachments.Binary file = d.attachments.get(id);
+    return ResponseEntity.ok()
+        .contentType(MediaType.parseMediaType(file.metadata().path("mimeType").asText()))
+        .header(
+            "Content-Disposition",
+            ContentDisposition.attachment()
+                .filename(file.metadata().path("name").asText(), StandardCharsets.UTF_8)
+                .build()
+                .toString())
+        .header("Cache-Control", "no-store")
+        .header("X-Content-Type-Options", "nosniff")
+        .body(file.bytes());
   }
 
   @GetMapping("/jobs/{id}")

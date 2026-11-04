@@ -25,6 +25,10 @@ final class Upstream {
   }
 
   static JsonNode post(String url, String token, ObjectNode body, Duration deadline) {
+    return post(url, token, body, deadline, 1_048_576);
+  }
+
+  static JsonNode post(String url, String token, ObjectNode body, Duration deadline, int maxBytes) {
     CompletableFuture<HttpResponse<byte[]>> pending = null;
     try {
       URI uri = URI.create(url);
@@ -38,7 +42,7 @@ final class Upstream {
               .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
               .build();
       // Deadline includes the entire response body, not merely receipt of headers.
-      pending = CLIENT.sendAsync(request, info -> new BoundedBody());
+      pending = CLIENT.sendAsync(request, info -> new BoundedBody(maxBytes));
       HttpResponse<byte[]> response = pending.get(deadline.toMillis(), TimeUnit.MILLISECONDS);
       if (response.statusCode() == 429)
         throw new ApiError(429, "UPSTREAM_RATE_LIMIT", "外部服务限流，请稍后重试", true);
@@ -73,6 +77,16 @@ final class Upstream {
   }
 
   static final class BoundedBody implements HttpResponse.BodySubscriber<byte[]> {
+    final int maxBytes;
+
+    BoundedBody() {
+      this(1_048_576);
+    }
+
+    BoundedBody(int maxBytes) {
+      this.maxBytes = maxBytes;
+    }
+
     final CompletableFuture<byte[]> result = new CompletableFuture<>();
     final ByteArrayOutputStream output = new ByteArrayOutputStream();
     Flow.Subscription subscription;
@@ -88,7 +102,7 @@ final class Upstream {
 
     public void onNext(List<ByteBuffer> buffers) {
       for (ByteBuffer b : buffers) {
-        if (output.size() + b.remaining() > 1_048_576) {
+        if (output.size() + b.remaining() > maxBytes) {
           subscription.cancel();
           result.completeExceptionally(new ApiError(502, "UPSTREAM_TOO_LARGE", "外部响应超过限制"));
           return;

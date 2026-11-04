@@ -40,12 +40,17 @@ class ApiFilter extends OncePerRequestFilter {
           if (!allowed) throw new ApiError(403, "FORBIDDEN", "设备凭据不能访问此资源");
         }
       }
-      if (req.getContentLengthLong() > 1_048_576)
-        throw new ApiError(413, "BODY_TOO_LARGE", "请求不能超过 1 MiB");
+      int limit =
+          req.getMethod().equals("POST")
+                  && (p.equals("/api/v1/conversations")
+                      || p.matches("/api/v1/problems/[0-9a-fA-F-]+/messages"))
+              ? 24 * 1024 * 1024
+              : 1_048_576;
+      if (req.getContentLengthLong() > limit) throw new ApiError(413, "BODY_TOO_LARGE", "请求超过大小限制");
       HttpServletRequest wrapped = req;
       if (req.getMethod().equals("POST") || req.getMethod().equals("PATCH")) {
-        byte[] body = req.getInputStream().readNBytes(1_048_577);
-        if (body.length > 1_048_576) throw new ApiError(413, "BODY_TOO_LARGE", "请求不能超过 1 MiB");
+        byte[] body = req.getInputStream().readNBytes(limit + 1);
+        if (body.length > limit) throw new ApiError(413, "BODY_TOO_LARGE", "请求超过大小限制");
         wrapped =
             new HttpServletRequestWrapper(req) {
               @Override
