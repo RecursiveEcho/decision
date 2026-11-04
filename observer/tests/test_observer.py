@@ -82,6 +82,9 @@ class Tests(unittest.TestCase):
         self.active(); original=self.source.items[0]['metadata_entries']; self.source.items[0]['metadata_entries']=[]
         self.runner.tick(); self.assertFalse(self.uploads()); self.source.items[0]['metadata_entries']=original
         self.runner.tick(); self.assertEqual(len(self.uploads()),1)
+    def test_empty_completed_ocr_not_pending(self):
+        self.active(); self.source.items[0]['metadata_entries']=[{'key':'ocr_result','value':'[]'}]
+        self.runner.tick(); self.assertFalse(self.runner.pending_ocr); self.assertFalse(self.uploads())
     def test_queue_bound(self):
         now=datetime.now(timezone.utc)
         for i in range(50): self.store.enqueue(observation(entity(now,i),CONFIG,PROBLEM,now,now))

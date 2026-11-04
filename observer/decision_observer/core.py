@@ -256,7 +256,13 @@ class Runner:
                 if stamp.tzinfo is None:
                     stamp = stamp.replace(tzinfo=ZoneInfo(self.config['pensieveTimezone']))
                 if stamp >= self.since:
-                    self.pending_ocr.add(ident)
+                    meta = {m['key']: m['value'] for m in entity.get('metadata_entries', [])}
+                    raw = meta.get('ocr_result')
+                    if raw and isinstance(json.loads(raw), list):
+                        self.pending_ocr.discard(ident)
+                        self.store.accepted(f"pensieve:{self.config['libraryId']}:{ident}")
+                    else:
+                        self.pending_ocr.add(ident)
             if self.store.db.execute('SELECT COUNT(*) FROM queue').fetchone()[0] >= 50:
                 break  # Continue from the recent window next tick after draining.
         self.flush()
