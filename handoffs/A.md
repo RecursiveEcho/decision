@@ -43,3 +43,10 @@
 - `a0224be` 已推送：同问题主题摘要/证据合并、Wiki HTTP/1.1及真实链路脚本。
 - 继续修复发现的边界：外部响应整体60秒deadline覆盖body读取、1MiB硬上限；网页总读取时间上限；撤销的本人记忆可在明确激活时恢复新来源；已发送通知选择稍后会重新挂起，到期才能再次交付。
 - 隔离PostgreSQL共26项通过（0 failures/errors/skipped）；新增真实HTTP测试夹具模拟慢响应与超大响应，并未调用真实外部服务。
+
+## G2 实际 Wiki 更新读回与构建修正（2026-11-04 17:55 Asia/Shanghai）
+
+- `1a3d9ed` 已推送。最新补丁进一步修正实际 Wiki.js 2.5.317 更新兼容：GraphQL schema 中 tags 虽可选，实际 update 省略时报 `Cannot read properties of undefined (reading 'map')`；实测提供 `tags:[]` 后 succeeded=true。HTTP/1.1修复与此修复均纳入模拟HTTP回归。
+- A 对真实独立 Wiki 实例用合成工程页面完成创建、同页两次更新与全文回读比对，页面ID保持2；无个人信息。这是 adapter 实际证据，不等于整条来源→真实模型主题→Wiki闭环已通过，后者由E统一服务运行增强smoke。
+- `live_smoke.py` 已加强：验证真实模型摘要的观点/条件/未知/证据；再次投入相关文章，断言同Topic/同Wiki页面、revision增加、新来源引文有效，并独立调用实际Wiki API回读全文；最后明确确认决定并追加复盘。
+- 按E构建诊断删除耗时的 Maven dependency:go-offline，构建采用可见的 package 日志和BuildKit Maven缓存，固定E已拉取核验的两份基础镜像digest。A不重复启动Docker构建；容器构建证据待E。

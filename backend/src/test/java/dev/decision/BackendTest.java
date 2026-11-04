@@ -303,6 +303,22 @@ class BackendTest {
           else {
             stored.set(input.path("variables").path("content").asText());
             String operation = query.contains("create(") ? "create" : "update";
+            if (operation.equals("update") && !query.contains("tags:[]")) {
+              byte[] bad =
+                  Json.obj(
+                          "data",
+                          Json.obj(
+                              "pages",
+                              Json.obj(
+                                  "update",
+                                  Json.obj("responseResult", Json.obj("succeeded", false)))))
+                      .toString()
+                      .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+              exchange.sendResponseHeaders(200, bad.length);
+              exchange.getResponseBody().write(bad);
+              exchange.close();
+              return;
+            }
             if (operation.equals("create")) creates.incrementAndGet();
             response =
                 Json.obj(
