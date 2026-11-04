@@ -1,0 +1,8 @@
+<view class="container"><view class="title">回查来源</view>
+  <view class="error" wx:if="{{error}}">{{error}}</view><button bindtap="load" loading="{{loading}}">重新读取来源</button>
+  <view class="card" wx:if="{{item}}"><view>{{item.title}}</view><view class="meta">{{item.kind}} · {{item.status}} · {{item.extractionMethod}}</view><view class="meta">{{item.author || '作者未提供'}} · {{item.capturedAt}}</view>
+    <view class="notice">资料观点、个人陈述与观察线索均需要结合情境判断，引用本身不证明结论。</view>
+    <text selectable class="body">{{item.text}}</text>
+    <view wx:if="{{item.originUrl}}"><text selectable class="body">{{item.originUrl}}</text><button bindtap="copy">复制原文链接，在浏览器打开</button></view>
+  </view>
+</view>

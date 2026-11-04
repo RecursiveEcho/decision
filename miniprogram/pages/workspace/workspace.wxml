@@ -1,0 +1,57 @@
+<view class="container">
+  <view class="title">继续想清楚</view>
+  <view class="tabs">
+    <button class="{{tab === 'chat' ? 'selected' : ''}}" data-tab="chat" bindtap="switchTab">讨论</button>
+    <button class="{{tab === 'sources' ? 'selected' : ''}}" data-tab="sources" bindtap="switchTab">资料</button>
+    <button class="{{tab === 'discussions' ? 'selected' : ''}}" data-tab="discussions" bindtap="switchTab">议题</button>
+    <button class="{{tab === 'decisions' ? 'selected' : ''}}" data-tab="decisions" bindtap="switchTab">决定</button>
+  </view>
+  <view class="error" wx:if="{{error}}">{{error}}</view><view class="notice" wx:if="{{notice}}">{{notice}}</view>
+  <view class="card" wx:if="{{jobId}}"><view>任务：{{jobState}}</view><view class="meta">离页会暂停查询；不会取消服务器任务。</view><button bindtap="resumeJob" loading="{{polling}}" disabled="{{polling}}">继续查询原任务</button></view>
+  <button size="mini" bindtap="refresh" loading="{{loading}}" disabled="{{loading}}">刷新记录</button>
+  <view class="meta" wx:if="{{!items.length && !loading}}">暂无记录。</view>
+  <view class="card" wx:for="{{items}}" wx:key="id">
+    <block wx:if="{{tab === 'chat'}}">
+      <view class="meta">{{item.role === 'user' ? '本人' : 'AI 建议 · 由本人判断'}} · {{item.createdAt}}</view>
+      <view class="notice" wx:if="{{item.modeLabel}}">{{item.modeLabel}}</view><text selectable class="body">{{item.content}}</text>
+      <view class="notice" wx:if="{{item.uncertainties.length}}">尚不确定：<view wx:for="{{item.uncertainties}}" wx:for-item="uncertainty" wx:key="*this">{{uncertainty}}</view></view>
+    </block>
+    <block wx:if="{{tab === 'sources'}}">
+      <view>{{item.title}}</view><view class="meta">{{item.kind}} · {{item.status}} · {{item.capturedAt}}</view><text selectable class="body">{{item.text}}</text>
+      <button data-id="{{item.id}}" bindtap="source">查看完整来源与链接</button>
+    </block>
+    <block wx:if="{{tab === 'discussions'}}">
+      <view>{{item.title}}</view><view class="meta">{{item.status}} · {{item.createdAt}}</view><text selectable class="body">{{item.reason}}</text>
+      <view class="meta" wx:if="{{item.snoozeUntil}}">稍后时间：{{item.snoozeUntil}}</view>
+      <view class="meta">当前可查看议题；已读、稍后与忽略请在网页操作。</view>
+    </block>
+    <block wx:if="{{tab === 'decisions'}}">
+      <view>{{item.choice}}</view><view class="meta">本人确认于 {{item.confirmedAt}}</view><view class="body">当时理由：{{item.rationale}}</view><view class="body">预期结果：{{item.expectedOutcome}}</view>
+      <view class="quote" wx:for="{{item.reviews}}" wx:for-item="review" wx:key="id"><view class="meta">复盘 · {{review.recordedAt}}</view><view class="body">结果：{{review.outcome}}</view><view class="body">反思：{{review.reflection}}</view></view>
+      <button data-id="{{item.id}}" bindtap="selectReview" disabled="{{busy}}">追加实际结果</button>
+    </block>
+    <view class="quote" wx:for="{{item.evidence}}" wx:for-item="ref"><view class="meta">{{ref.relationLabel}} · 引用不等于事实已验证</view><text selectable class="body">{{ref.quote}}</text><button data-id="{{ref.sourceId}}" bindtap="source">回查来源</button></view>
+  </view>
+  <button wx:if="{{nextCursor}}" bindtap="more" disabled="{{loading}}">加载更多（按服务器顺序）</button>
+  <view class="card" wx:if="{{tab === 'chat'}}">
+    <textarea placeholder="想讨论什么？" value="{{content}}" data-field="content" bindinput="input" maxlength="10000" disabled="{{busy || jobId}}" />
+    <button type="primary" bindtap="send" loading="{{busy}}" disabled="{{busy || jobId}}">发送讨论</button>
+  </view>
+  <view class="card" wx:if="{{tab === 'sources'}}"><view>提交文章</view><view class="meta">可粘贴正文兜底；同时提供链接时优先保存正文。</view>
+    <input placeholder="标题（可选）" value="{{sourceTitle}}" data-field="sourceTitle" bindinput="input" disabled="{{busy || jobId}}" />
+    <input placeholder="文章 URL（可选）" value="{{sourceUrl}}" data-field="sourceUrl" bindinput="input" maxlength="4000" disabled="{{busy || jobId}}" />
+    <textarea placeholder="粘贴正文" value="{{sourceText}}" data-field="sourceText" bindinput="input" maxlength="20000" disabled="{{busy || jobId}}" />
+    <button type="primary" bindtap="ingest" loading="{{busy}}" disabled="{{busy || jobId}}">提交资料</button>
+  </view>
+  <view class="card" wx:if="{{tab === 'decisions' && !reviewId}}"><view>记录我的决定</view>
+    <textarea placeholder="我决定怎么做" value="{{choice}}" data-field="choice" bindinput="input" maxlength="4000" disabled="{{busy}}" />
+    <textarea placeholder="当时理由" value="{{rationale}}" data-field="rationale" bindinput="input" maxlength="10000" disabled="{{busy}}" />
+    <textarea placeholder="预期结果" value="{{expectedOutcome}}" data-field="expectedOutcome" bindinput="input" maxlength="4000" disabled="{{busy}}" />
+    <button type="primary" bindtap="decide" loading="{{busy}}" disabled="{{busy}}">确认记录决定</button>
+  </view>
+  <view class="card" wx:if="{{tab === 'decisions' && reviewId}}"><view>追加复盘</view>
+    <textarea placeholder="实际发生了什么" value="{{outcome}}" data-field="outcome" bindinput="input" maxlength="10000" disabled="{{busy}}" />
+    <textarea placeholder="回看当时判断，有什么反思" value="{{reflection}}" data-field="reflection" bindinput="input" maxlength="10000" disabled="{{busy}}" />
+    <button type="primary" bindtap="review" loading="{{busy}}" disabled="{{busy}}">保存复盘</button><button bindtap="cancelReview" disabled="{{busy}}">取消</button>
+  </view>
+</view>
