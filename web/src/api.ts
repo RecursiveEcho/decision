@@ -2,6 +2,7 @@ import type { Job } from "./types";
 import { clearChatSession } from "./chatStorage";
 import { clearMediaSession, purgeExpiredMedia } from "./mediaStorage";
 import { OVERVIEW_STORAGE } from "./overviewStorage";
+import { KNOWLEDGE_STORAGE } from "./knowledgeStorage";
 const SESSION = "decision.session";
 let sessionRequests = new AbortController();
 export class ApiError extends Error {
@@ -27,6 +28,7 @@ export function token(): string {
 }
 export function setSession(s: { accessToken: string; expiresAt: string }) {
   sessionStorage.removeItem(OVERVIEW_STORAGE);
+  sessionStorage.removeItem(KNOWLEDGE_STORAGE);
   clearLocalMedia();
   clearChatSession();
   sessionStorage.setItem(
@@ -67,6 +69,7 @@ export function sessionId(): string {
 }
 export function logout() {
   sessionStorage.removeItem(OVERVIEW_STORAGE);
+  sessionStorage.removeItem(KNOWLEDGE_STORAGE);
   sessionRequests.abort();
   clearLocalMedia();
   sessionRequests = new AbortController();
