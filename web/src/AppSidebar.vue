@@ -221,7 +221,7 @@ defineExpose({ openMenu });
                 (tool.title !== '讨论' || !newProblem) &&
                 activeTab === tool.title,
             }"
-            :disabled="busy || (newProblem && tool.title === '资料与主题')"
+            :disabled="busy"
             @click="navigate(() => emit('tool', tool.title))"
           >
             <component :is="tool.icon" :size="18" />

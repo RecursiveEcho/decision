@@ -72,6 +72,11 @@ const problem = computed(() =>
     ? undefined
     : problems.value.find((p) => p.id === selected.value),
 );
+const knowledgeProblemId = computed(() => problem.value?.id || "");
+function openSourceConversation(id: string) {
+  if (!id || busy.value || pendingChat.value) return;
+  displayedProblem.value = id;
+}
 const messages = ref<Message[]>([]),
   sources = ref<Source[]>([]),
   memories = ref<Memory[]>([]),
@@ -374,6 +379,18 @@ async function load() {
     assign(memories, await list<Memory>("/memories"));
     return;
   }
+  if (section === "资料与主题") {
+    const q = knowledgeProblemId.value
+      ? `?problemId=${encodeURIComponent(knowledgeProblemId.value)}`
+      : "";
+    const [s, t] = await Promise.all([
+      list<Source>("/sources" + q),
+      list<Topic>("/topics" + q),
+    ]);
+    assign(sources, s);
+    assign(topics, t);
+    return;
+  }
   if (newProblem.value) return;
   if (!id) return;
   const q = `?problemId=${encodeURIComponent(id)}`;
@@ -389,14 +406,6 @@ async function load() {
     assign(decisions, dec);
     assign(sources, s);
     if (g === generation) mock.value = m.some((x) => x.mode === "mock");
-  }
-  if (section === "资料与主题") {
-    const [s, t] = await Promise.all([
-      list<Source>("/sources" + q),
-      list<Topic>("/topics" + q),
-    ]);
-    assign(sources, s);
-    assign(topics, t);
   }
 }
 async function login() {
@@ -468,9 +477,11 @@ async function stopMissingMedia() {
   await act(refresh);
 }
 async function ingest() {
+  const id = knowledgeProblemId.value;
+  if (!id) return;
   await act(async () => {
     await job("/sources", {
-      problemId: selected.value,
+      problemId: id,
       kind: "article",
       title: sourceTitle.value || undefined,
       text: sourceText.value || undefined,
@@ -483,9 +494,11 @@ async function ingest() {
   });
 }
 async function reanalyze() {
+  const id = knowledgeProblemId.value;
+  if (!id) return;
   await act(async () => {
     try {
-      await job(`/problems/${selected.value}/analyze`, {});
+      await job(`/problems/${id}/analyze`, {});
       note.value = "资料分析已完成；Wiki 同步状态请查看下方主题。";
     } catch (failure) {
       // Refresh topic status without replacing the original analysis error.
@@ -925,7 +938,11 @@ onUnmounted(() => {
           </div>
         </template>
         <template v-else-if="tab === '资料与主题'">
-          <form class="card" @submit.prevent="ingest">
+          <p v-if="!knowledgeProblemId" class="muted">
+            全部资料 · 来自各个对话
+          </p>
+          <p v-else class="muted">当前对话：{{ problem?.title }}</p>
+          <form v-if="knowledgeProblemId" class="card" @submit.prevent="ingest">
             <h2>添加资料</h2>
             <label>标题（可选）<input v-model="sourceTitle" /></label
             ><label
@@ -950,6 +967,14 @@ onUnmounted(() => {
             <h3>{{ s.title }}</h3>
             <p>{{ label(s.status) }} · {{ date(s.capturedAt) }}</p>
             <button
+              v-if="!knowledgeProblemId && s.problemId"
+              class="secondary"
+              :disabled="busy || !!pendingChat"
+              @click="openSourceConversation(s.problemId)"
+            >
+              打开原对话
+            </button>
+            <button
               class="secondary"
               :disabled="busy"
               @click="showSource(s.id)"
@@ -957,6 +982,7 @@ onUnmounted(() => {
               查看原文
             </button>
             <button
+              v-if="knowledgeProblemId"
               class="danger"
               :disabled="busy"
               @click="remove(`/sources/${s.id}`)"
@@ -965,7 +991,7 @@ onUnmounted(() => {
             </button>
           </article>
           <h2>知识主题</h2>
-          <div v-if="sources.length" class="card">
+          <div v-if="knowledgeProblemId && sources.length" class="card">
             <p>
               摘要未完成或资料、记忆有变化时，可重新分析已有资料，无需重复上传。Wiki
               同步仅负责把已有主题写入 Wiki。
@@ -975,6 +1001,14 @@ onUnmounted(() => {
           <p v-if="!topics.length" class="muted">暂无主题，等待资料处理。</p>
           <article v-for="t in topics" :key="t.id" class="card">
             <h3>{{ t.title }}</h3>
+            <button
+              v-if="!knowledgeProblemId && t.problemId"
+              class="secondary"
+              :disabled="busy || !!pendingChat"
+              @click="openSourceConversation(t.problemId)"
+            >
+              打开原对话
+            </button>
             <p class="pre">{{ t.markdown }}</p>
             <p>Wiki：{{ label(t.syncStatus) }}</p>
             <a
@@ -985,6 +1019,7 @@ onUnmounted(() => {
               >查看 Wiki</a
             >
             <button
+              v-if="knowledgeProblemId"
               class="secondary"
               :disabled="busy"
               @click="act(() => job(`/topics/${t.id}/sync`, {}))"
