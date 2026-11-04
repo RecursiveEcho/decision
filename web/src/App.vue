@@ -13,6 +13,8 @@ import AppSidebar from "./AppSidebar.vue";
 import EvidencePanel from "./EvidencePanel.vue";
 import AttachmentList from "./AttachmentList.vue";
 import ChatRecords from "./ChatRecords.vue";
+import MemoryPage from "./MemoryPage.vue";
+import { useMemoryOverview } from "./memoryOverview";
 import {
   ArrowUp,
   Menu,
@@ -89,6 +91,7 @@ const sourceDetail = ref<Source | null>(null),
   sourceUrl = ref(""),
   chosenSources = ref<string[]>([]);
 const sourceQuotes = ref<Evidence[]>([]);
+const memoryOverview = useMemoryOverview();
 const composer = ref<HTMLFormElement | null>(null);
 const composerInput = ref<HTMLTextAreaElement | null>(null);
 const errorBanner = ref<HTMLDivElement | null>(null);
@@ -335,6 +338,7 @@ async function act(fn: () => Promise<void>) {
 }
 function ended() {
   generation++;
+  memoryOverview.stop();
   logged.value = false;
   problems.value = [];
   selected.value = "";
@@ -376,7 +380,10 @@ async function load() {
     if (g === generation && logged.value) target.value = value;
   };
   if (section === "记忆") {
+    memoryOverview.stop();
     assign(memories, await list<Memory>("/memories"));
+    if (g === generation && logged.value && tab.value === "记忆")
+      void memoryOverview.open();
     return;
   }
   if (section === "资料与主题") {
@@ -519,22 +526,43 @@ async function remove(path: string) {
   if (!confirm("确认删除？删除后不再用于当前检索；外部备份不保证同步删除。"))
     return;
   await act(async () => {
-    await request(path, "DELETE");
-    await load();
+    if (path.startsWith("/memories/")) await mutateMemory(path, "DELETE");
+    else {
+      await request(path, "DELETE");
+      await load();
+    }
   });
 }
 async function changeMemory(m: Memory) {
   const text = prompt("纠正这条记忆（保留历史与原类型）", m.content);
   if (text === null || !text.trim()) return;
   await act(async () => {
-    await request(`/memories/${m.id}`, "PATCH", {
+    await mutateMemory(`/memories/${m.id}`, "PATCH", {
       content: text,
       expectedRevision: m.revision,
     });
-    await load();
   });
 }
+async function mutateMemory(path: string, method: string, body?: unknown) {
+  memoryOverview.stop();
+  try {
+    await request(path, method, body);
+  } catch (failure) {
+    if (logged.value) await load().catch(() => {});
+    throw failure;
+  }
+  if (logged.value) await load();
+}
+async function forgetMemory(memory: Memory) {
+  await act(() =>
+    mutateMemory(`/memories/${memory.id}`, "PATCH", {
+      status: "retracted",
+      expectedRevision: memory.revision,
+    }),
+  );
+}
 watch([selected, tab, newProblem], ([id], [old]) => {
+  memoryOverview.stop();
   if (id !== old) {
     editingGoal.value = false;
     goalDraft.value = "";
@@ -555,6 +583,7 @@ onMounted(() => {
 });
 onUnmounted(() => {
   generation++;
+  memoryOverview.stop();
   chat.dispose();
   window.removeEventListener("session-ended", ended);
   window.removeEventListener("media-cleanup-error", cleanupFailure);
@@ -1034,57 +1063,23 @@ onUnmounted(() => {
             />
           </article>
         </template>
-        <template v-else-if="tab === '记忆'">
-          <h2>记住的事</h2>
-          <p class="muted">从聊天中积累。记错了，可以随时纠正或忘记。</p>
-          <p v-if="!memories.length" class="empty">
-            还没有记忆，照常聊天就好。
-          </p>
-          <article v-for="m in memories" :key="m.id" class="memory-row">
-            <small
-              >{{ m.scope === "global" ? "用于其他对话" : "仅用于原对话"
-              }}<span v-if="m.kind === 'inferred'"> · 推断，未由你确认</span
-              ><span v-else-if="m.kind === 'observed'"> · 观察所得</span
-              ><span v-if="m.status !== 'active'"> · 已忘记</span></small
-            >
-            <p class="pre">{{ m.content }}</p>
-            <details v-if="m.sourceQuote" class="record-origin">
-              <summary>查看你的原话</summary>
-              <blockquote>{{ m.sourceQuote }}</blockquote>
-            </details>
-            <button class="secondary" :disabled="busy" @click="changeMemory(m)">
-              纠正
-            </button>
-            <button
-              class="secondary"
-              :disabled="busy || m.status === 'retracted'"
-              @click="
-                act(async () => {
-                  await request(`/memories/${m.id}`, 'PATCH', {
-                    status: 'retracted',
-                    expectedRevision: m.revision,
-                  });
-                  await load();
-                })
-              "
-            >
-              忘记
-            </button>
-            <button
-              class="danger"
-              :disabled="busy"
-              @click="remove(`/memories/${m.id}`)"
-            >
-              删除
-            </button>
-            <EvidencePanel
-              :evidence="m.evidence"
-              :sources="sources"
-              :busy="busy"
-              @open="showSource"
-            />
-          </article>
-        </template>
+        <MemoryPage
+          v-else-if="tab === '记忆'"
+          :memories="memories"
+          :overview="memoryOverview.overview.value"
+          :loading="memoryOverview.loading.value"
+          :error="memoryOverview.error.value"
+          :uncertain="memoryOverview.uncertain.value"
+          :busy="busy"
+          :sources="sources"
+          @correct="changeMemory"
+          @forget="forgetMemory"
+          @remove="(id) => remove(`/memories/${id}`)"
+          @source="showSource"
+          @refresh="act(load)"
+          @retry="memoryOverview.open({ retry: true })"
+          @resume="memoryOverview.open({ resume: true })"
+        />
       </div>
     </main>
     <div v-if="sourceDetail" class="overlay" @click.self="sourceDetail = null">

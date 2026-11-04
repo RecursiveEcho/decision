@@ -278,3 +278,13 @@ E部署A50d5a3a并通知最终ready后，B仅GET定点回读三组合成问题�
 已修资料入口：新对话资料页请求全局/sources、/topics，不带保留的旧selected ID；明确全部资料，总览无添加/重分析/同步写入口，对提交函数另加有效上下文保护。每条资料/主题用自身problemId打开原对话，沿用pending禁切；已有对话查询仍保留problemId。补全共享实体已有的Source/Topic.problemId前端类型，不改公共契约。
 
 构建和36测试通过。独立5173合成浏览器验证桌面/56px侧栏/390工具可达，全局GET无旧ID、0表单/0重分析、两个原对话入口正确，局部请求problemId正确。新对话文字+TXT附件+max档经工具往返/打开原对话再新对话/手机往返全部不丢，整页无横向溢出，业务写0。截图knowledge-overview-desktop/rail/mobile.png仅本机忽略目录，不计真实后端验收；用户窗口未动。记忆提炼等待E/A正式投影字段，不用slice或省略号冒充摘要，后续继续本角色开发。
+
+### 记忆概览实现与自检（2026-11-05）
+
+接E正式fingerprint+coverage契约，新增MemoryPage/MemoryDetails/useMemoryOverview。记忆页无problemId GET纯读，missing自动POST一次，轮询overview而非Job.result；轮询不占全局busy，可导航。默认仅真正ready投影最多5点/80字符，不截原记录；按memoryRefs精确revision、active user_reported、scope/problemId及去重验证后展示，一点一个展开入口，原话/来源/纠正忘记删除藏入详情；全部原记录单入口，旧推断/观察/撤回不混入默认重点。空态不发POST、不要求手填。
+
+mutation开始立即清旧概览，完成重新获取原记录与投影；页面/登录/generation拒绝旧异步响应。失败不循环烧模型，retryable才显式新轮重试；429/未知响应保存原fingerprint/key/body并GET确认。独立只读复审指出retry未知后仍见旧failed会误换key，已补previousJobId/unconfirmed与session隔离持久化，重新连接优先同key；logout/login清除请求缓存。只在明确已结束的新失败后下一次retry新key。
+
+47测试与构建通过（新增11项概览缓存/empty/pending导航/旧登录响应/未知结果同key跨controller恢复/failed显式重试/409/存储失败及refs/scope版本校验）。独立浏览器全拦截合成投影验证：默认4点、0可见管理按钮、全部8条单入口；同义2条在一详情内，否定及不同问题条件分开；pending可导航且仅1次创建，纠正后旧点消失，忘记后新投影不再引用该ID，390无横向溢出。E已目视memory-overview-desktop/mobile及details-mobile截图通过。合成投影不计真实模型提炼，截图只存本机忽略目录。
+
+生产当前17原记录无active user_reported由E只读核实，应empty且0模型请求；真实positive归并由E隔离18080/18088链路准备，B待ready只读验证真实结果和生产空概览，不向本人profile新增测试偏好。入口44f0971已先部署，本提交供E合入最终概览版。
