@@ -1,10 +1,12 @@
 import type { Job } from "./types";
+import { clearChatSession } from "./chatStorage";
 const SESSION = "decision.session";
 let sessionRequests = new AbortController();
 export class ApiError extends Error {
   constructor(
     message: string,
     public status = 0,
+    public code = "",
   ) {
     super(message);
   }
@@ -12,18 +14,36 @@ export class ApiError extends Error {
 export function token(): string {
   try {
     const s = JSON.parse(sessionStorage.getItem(SESSION) || "null");
-    return s && Date.parse(s.expiresAt) > Date.now() ? s.accessToken : "";
+    if (s && !(Date.parse(s.expiresAt) > Date.now())) {
+      logout();
+      return "";
+    }
+    return s?.accessToken || "";
   } catch {
     return "";
   }
 }
 export function setSession(s: { accessToken: string; expiresAt: string }) {
-  sessionStorage.setItem(SESSION, JSON.stringify(s));
+  clearChatSession();
+  sessionStorage.setItem(
+    SESSION,
+    JSON.stringify({ ...s, localId: crypto.randomUUID() }),
+  );
+}
+export function sessionId(): string {
+  if (!token()) return "";
+  const s = JSON.parse(sessionStorage.getItem(SESSION)!);
+  if (!s.localId) {
+    s.localId = crypto.randomUUID();
+    sessionStorage.setItem(SESSION, JSON.stringify(s));
+  }
+  return s.localId;
 }
 export function logout() {
   sessionRequests.abort();
   sessionRequests = new AbortController();
   sessionStorage.removeItem(SESSION);
+  clearChatSession();
   window.dispatchEvent(new Event("session-ended"));
 }
 export const sleep = (ms: number) =>
@@ -87,6 +107,7 @@ export async function request<T>(
             ? `服务暂时不可用（${response.status}），请稍后刷新或确认后端已启动。`
             : `请求未完成（${response.status}）`),
         response.status,
+        data?.error?.code || "",
       );
     }
     const result = response.status === 204 ? undefined : await response.json();
@@ -115,17 +136,18 @@ export async function waitJob(
   job: Job,
   active: () => boolean,
   update: (job: Job) => void,
-): Promise<void> {
+): Promise<boolean> {
   const deadline = Date.now() + 180000;
   while (active()) {
     update(job);
-    if (job.status === "succeeded") return;
+    if (job.status === "succeeded") return true;
     if (job.status === "failed")
       throw new ApiError(job.error?.message || "处理失败，请查看记录后重试。");
     if (Date.now() > deadline)
       throw new ApiError("处理仍未结束，请稍后刷新；不要重复提交。");
     await sleep(2000);
-    if (!active()) return;
+    if (!active()) return false;
     job = await request<Job>(`/jobs/${encodeURIComponent(job.id)}`);
   }
+  return false;
 }

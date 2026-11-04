@@ -10,6 +10,7 @@ import {
   waitJob,
 } from "./api";
 import DeviceRegistration from "./DeviceRegistration.vue";
+import { useChatFlow } from "./chatFlow";
 import type {
   Decision,
   Device,
@@ -34,7 +35,9 @@ const tab = ref("讨论"),
   problems = ref<Problem[]>([]),
   selected = ref("");
 const problem = computed(() =>
-  problems.value.find((p) => p.id === selected.value),
+  newProblem.value
+    ? undefined
+    : problems.value.find((p) => p.id === selected.value),
 );
 const messages = ref<Message[]>([]),
   sources = ref<Source[]>([]),
@@ -45,12 +48,7 @@ const messages = ref<Message[]>([]),
   devices = ref<Device[]>([]),
   status = ref<Status | null>(null);
 const sourceDetail = ref<Source | null>(null),
-  newProblem = ref(false),
-  title = ref(""),
-  goal = ref(""),
-  constraints = ref(""),
-  unknowns = ref(""),
-  content = ref(""),
+  newProblem = ref(true),
   sourceTitle = ref(""),
   sourceText = ref(""),
   sourceUrl = ref(""),
@@ -63,9 +61,53 @@ const sourceDetail = ref<Source | null>(null),
 const reviewDraft = ref<
   Record<string, { outcome: string; reflection: string }>
 >({});
-const newProblemForm = ref<HTMLFormElement | null>(null);
-const newProblemTitle = ref<HTMLInputElement | null>(null);
+const composer = ref<HTMLFormElement | null>(null);
+const composerInput = ref<HTMLTextAreaElement | null>(null);
 const errorBanner = ref<HTMLDivElement | null>(null);
+const chat = useChatFlow({
+  accepted(id, created) {
+    if (created)
+      problems.value = [created, ...problems.value.filter((p) => p.id !== id)];
+    selected.value = id;
+    newProblem.value = false;
+    tab.value = "讨论";
+  },
+  async refresh() {
+    await refresh();
+    await nextTick();
+    composer.value?.scrollIntoView({ block: "nearest", behavior: "auto" });
+  },
+});
+const pendingChat = chat.pending;
+const chatDraft = computed({
+  get: () =>
+    chat.drafts.value[newProblem.value ? "new" : selected.value || "new"] || "",
+  set(value: string) {
+    try {
+      chat.setDraft(newProblem.value ? "new" : selected.value || "new", value);
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : "无法暂存这段话。";
+    }
+  },
+});
+const showPendingSentence = computed(
+  () =>
+    pendingChat.value &&
+    (newProblem.value || pendingChat.value.problemId === selected.value) &&
+    (newProblem.value ||
+      !messages.value.some(
+        (m) => m.role === "user" && m.content === pendingChat.value!.content,
+      )),
+);
+const pendingAction = computed(() =>
+  pendingChat.value?.operation
+    ? pendingChat.value.operation.path.endsWith("/retry")
+      ? "重试回答"
+      : "继续发送"
+    : pendingChat.value?.job?.status === "failed"
+      ? "重试回答"
+      : "继续获取回答",
+);
 const editingGoal = ref(false);
 const goalDraft = ref("");
 function openGoalEditor() {
@@ -90,18 +132,31 @@ const displayedProblem = computed({
   set: (id: string) => {
     newProblem.value = false;
     selected.value = id;
+    tab.value = "讨论";
+    error.value = "";
+    note.value = "";
   },
 });
 async function openNewProblem() {
-  if (busy.value) return;
+  if (busy.value || pendingChat.value) return;
   newProblem.value = true;
+  tab.value = "讨论";
   editingGoal.value = false;
   sourceDetail.value = null;
   error.value = "";
   note.value = "";
   await nextTick();
-  newProblemForm.value?.scrollIntoView({ block: "start", behavior: "auto" });
-  newProblemTitle.value?.focus({ preventScroll: true });
+  composer.value?.scrollIntoView({ block: "nearest", behavior: "auto" });
+  composerInput.value?.focus({ preventScroll: true });
+}
+async function editOriginal() {
+  chat.editOriginal();
+  await nextTick();
+  composerInput.value?.focus();
+}
+async function leaveConversation() {
+  chat.leaveFinished();
+  await openNewProblem();
 }
 let generation = 0;
 const safeUrl = (value: string | null) => {
@@ -147,7 +202,7 @@ async function act(fn: () => Promise<void>) {
     note.value = "";
     if (!(e instanceof ApiError && e.status === 499))
       error.value = e instanceof Error ? e.message : "操作失败";
-    if (newProblem.value && error.value) {
+    if (error.value) {
       await nextTick();
       errorBanner.value?.scrollIntoView({ block: "nearest", behavior: "auto" });
     }
@@ -163,15 +218,11 @@ function ended() {
   newProblem.value = false;
   editingGoal.value = false;
   goalDraft.value = "";
-  title.value = "";
-  goal.value = "";
-  constraints.value = "";
-  unknowns.value = "";
+  chat.clear();
   clearData();
   devices.value = [];
   status.value = null;
   sourceDetail.value = null;
-  content.value = "";
   chosenSources.value = [];
   sourceText.value = "";
   sourceUrl.value = "";
@@ -192,7 +243,10 @@ function clearData() {
 }
 async function loadProblems() {
   problems.value = await list<Problem>("/problems");
-  if (!problems.value.some((p) => p.id === selected.value))
+  if (
+    !pendingChat.value?.problemId &&
+    !problems.value.some((p) => p.id === selected.value)
+  )
     selected.value = problems.value[0]?.id || "";
 }
 async function refresh() {
@@ -215,6 +269,7 @@ async function load() {
     assign(devices, d);
     return;
   }
+  if (newProblem.value) return;
   if (!id) return;
   const q = `?problemId=${encodeURIComponent(id)}`;
   if (section === "讨论") {
@@ -250,33 +305,29 @@ async function login() {
     setSession(s);
     accessCode.value = "";
     logged.value = true;
-    await loadProblems();
-    await load();
+    await initialize();
   });
 }
-async function createProblem() {
-  await act(async () => {
-    const p = await request<Problem>("/problems", "POST", {
-      title: title.value,
-      goal: goal.value,
-      constraints: constraints.value.split("\n").filter(Boolean),
-      unknowns: unknowns.value.split("\n").filter(Boolean),
-    });
-    problems.value.unshift(p);
-    selected.value = p.id;
-    newProblem.value = false;
-    title.value = "";
-    goal.value = "";
-    constraints.value = "";
-    unknowns.value = "";
-    await load();
-  });
+async function initialize() {
+  chat.restore();
+  tab.value = "讨论";
+  newProblem.value = !pendingChat.value?.problemId;
+  if (pendingChat.value?.problemId)
+    selected.value = pendingChat.value.problemId;
+  await loadProblems();
+  await load();
+  if (
+    pendingChat.value?.job &&
+    !pendingChat.value.operation &&
+    pendingChat.value.state !== "stale"
+  )
+    await chat.resume();
 }
 async function job(path: string, body: unknown) {
   const id = selected.value;
   const j = await request<Job>(path, "POST", body);
   const current = generation;
-  await waitJob(
+  const completed = await waitJob(
     j,
     () => logged.value && selected.value === id && generation === current,
     (j) => {
@@ -285,17 +336,16 @@ async function job(path: string, body: unknown) {
       if (j.mode === "mock") mock.value = true;
     },
   );
+  if (!completed) throw new ApiError("已停止等待。", 499);
   if (logged.value && selected.value === id) await load();
 }
 async function send() {
-  await act(async () => {
-    const text = content.value;
-    await job(`/problems/${selected.value}/messages`, {
-      content: text,
-      sourceIds: chosenSources.value,
-    });
-    content.value = "";
-  });
+  await act(() =>
+    chat.send(
+      newProblem.value ? null : selected.value || null,
+      chosenSources.value,
+    ),
+  );
 }
 async function ingest() {
   await act(async () => {
@@ -416,7 +466,6 @@ watch([selected, tab], ([id], [old]) => {
     goalDraft.value = "";
     clearData();
     chosenSources.value = [];
-    content.value = "";
     sourceDetail.value = null;
     sourceTitle.value = "";
     sourceText.value = "";
@@ -432,14 +481,11 @@ watch([selected, tab], ([id], [old]) => {
 });
 onMounted(() => {
   window.addEventListener("session-ended", ended);
-  if (logged.value)
-    void act(async () => {
-      await loadProblems();
-      await load();
-    });
+  if (logged.value) void act(initialize);
 });
 onUnmounted(() => {
   generation++;
+  chat.dispose();
   window.removeEventListener("session-ended", ended);
 });
 </script>
@@ -465,51 +511,54 @@ onUnmounted(() => {
   <div v-else class="shell">
     <aside>
       <div class="brand">知衡 <span>个人决策工作台</span></div>
-      <label
-        >当前问题<select v-model="displayedProblem" :disabled="busy">
-          <option value="" disabled>
-            {{ newProblem ? "新建问题（待创建）" : "选择一个问题" }}
-          </option>
-          <option v-for="p in problems" :key="p.id" :value="p.id">
-            {{ p.title }}
-          </option>
-        </select></label
-      ><button
-        class="secondary"
-        @click="openNewProblem"
-        :disabled="busy"
-        :aria-expanded="newProblem"
-        aria-controls="new-problem-form"
-      >
-        ＋ 新建问题
+      <button @click="openNewProblem" :disabled="busy || !!pendingChat">
+        ＋ 新对话
       </button>
-      <nav>
-        <button
-          v-for="item in tabs"
-          :key="item"
-          :class="{ active: !newProblem && tab === item }"
-          :disabled="busy"
-          @click="
-            newProblem = false;
-            tab = item;
-          "
+      <details class="sidebar-section" v-if="problems.length">
+        <summary>历史对话</summary>
+        <label
+          >选择对话<select
+            v-model="displayedProblem"
+            :disabled="busy || !!pendingChat"
+          >
+            <option value="" disabled>新对话</option>
+            <option v-for="p in problems" :key="p.id" :value="p.id">
+              {{ p.title }}
+            </option>
+          </select></label
         >
-          {{ item }}
-        </button>
-      </nav>
+      </details>
+      <details class="sidebar-section">
+        <summary>更多工具</summary>
+        <nav>
+          <button
+            v-for="item in tabs"
+            :key="item"
+            :class="{ active: !newProblem && tab === item }"
+            :disabled="
+              busy || (newProblem && item !== '讨论' && item !== '服务与观察')
+            "
+            @click="tab = item"
+          >
+            {{ item }}
+          </button>
+        </nav>
+      </details>
       <div class="aside-foot">建议供你判断<br />决定由你确认</div>
       <button class="secondary" @click="logout">退出登录</button>
     </aside>
     <main>
       <header>
         <div>
-          <small>个人空间 / {{ newProblem ? "新建问题" : tab }}</small>
           <h1>
             {{
-              newProblem ? "新建问题" : problem?.title || "从一个真实问题开始"
+              tab !== "讨论"
+                ? tab
+                : newProblem
+                  ? "想聊点什么？"
+                  : problem?.title || "对话"
             }}
           </h1>
-          <p v-if="!newProblem && problem">{{ problem.goal }}</p>
         </div>
         <button class="secondary" :disabled="busy" @click="act(refresh)">
           刷新
@@ -522,54 +571,26 @@ onUnmounted(() => {
       <div v-if="mock && !newProblem" class="error">
         当前包含测试替身（mock）结果，不代表真实模型验证。
       </div>
-      <div v-if="busy" role="status" class="muted">正在处理…</div>
-      <form
-        v-if="newProblem"
-        id="new-problem-form"
-        ref="newProblemForm"
-        class="card new-problem-form"
-        aria-label="新建问题"
-        @submit.prevent="createProblem"
-      >
-        <h2>新建问题</h2>
-        <label
-          >问题标题<input
-            ref="newProblemTitle"
-            v-model="title"
-            required
-            maxlength="200" /></label
-        ><label>希望达到的目标<textarea v-model="goal" required /></label>
-        <div class="columns">
-          <label>限制条件（每行一条）<textarea v-model="constraints" /></label
-          ><label>尚不清楚（每行一条）<textarea v-model="unknowns" /></label>
-        </div>
-        <button :disabled="busy">创建问题</button>
-        <button
-          type="button"
-          class="secondary"
-          :disabled="busy"
-          @click="newProblem = false"
-        >
-          取消
-        </button>
-      </form>
-      <div v-else-if="!selected && tab !== '服务与观察'" class="empty">
-        <h2>你正在考虑什么？</h2>
-        <p>新建问题，写下目标和还不确定的地方。</p>
+      <div v-if="busy" role="status" class="muted">
+        {{ tab === "讨论" && pendingChat ? "正在想一想…" : "正在加载…" }}
       </div>
-      <template v-else-if="tab === '讨论'">
-        <details v-if="problem" class="card">
-          <summary>目标、限制与未知</summary>
-          <p>目标：{{ problem.goal }}</p>
-          <p>限制：{{ problem.constraints.join("；") || "尚未填写" }}</p>
-          <p>未知：{{ problem.unknowns.join("；") || "尚未填写" }}</p>
+      <template v-if="tab === '讨论'">
+        <details v-if="problem" class="conversation-details">
+          <summary>对话信息</summary>
+          <p v-if="problem.goal">目标：{{ problem.goal }}</p>
+          <p v-if="problem.constraints.length">
+            限制：{{ problem.constraints.join("；") }}
+          </p>
+          <p v-if="problem.unknowns.length">
+            待确认：{{ problem.unknowns.join("；") }}
+          </p>
           <button
             v-if="!editingGoal"
             class="secondary"
             :disabled="busy"
             @click="openGoalEditor"
           >
-            修改目标
+            {{ problem.goal ? "修改目标" : "补充目标（可选）" }}
           </button>
           <form v-else @submit.prevent="saveGoal">
             <label
@@ -590,12 +611,8 @@ onUnmounted(() => {
             </button>
           </form>
         </details>
-        <div v-if="!messages.length" class="empty">
-          <h2>先说说你的处境</h2>
-          <p>可以先添加资料，再请助手比较选择与依据。</p>
-        </div>
         <article
-          v-for="m in messages"
+          v-for="m in newProblem ? [] : messages"
           :key="m.id"
           class="card message"
           :class="m.role"
@@ -619,15 +636,65 @@ onUnmounted(() => {
             <p v-for="u in m.uncertainties" :key="u">尚不确定：{{ u }}</p>
           </details>
         </article>
-        <form class="card composer" @submit.prevent="send">
-          <label
-            >说说你的问题<textarea
-              v-model="content"
+        <article v-if="showPendingSentence" class="card message user">
+          <small>你</small>
+          <p class="pre">{{ pendingChat!.content }}</p>
+        </article>
+        <div v-if="pendingChat && !busy" class="pending-recovery" role="status">
+          <p v-if="pendingChat.state === 'stale'">
+            原话还在。对话内容已有变化，请调整后再发。
+          </p>
+          <p
+            v-else-if="
+              !pendingChat.operation && pendingChat.job?.status === 'failed'
+            "
+          >
+            回答暂时没生成，原话已经保存。
+          </p>
+          <p v-else-if="pendingChat.state === 'done'">
+            回答已经生成，正在恢复显示。
+          </p>
+          <p v-else>原话还在，可以接着获取回答。</p>
+          <button v-if="pendingChat.state === 'stale'" @click="editOriginal">
+            调整原话
+          </button>
+          <button v-else @click="act(() => chat.resume(true))">
+            {{ pendingAction }}
+          </button>
+          <button
+            v-if="
+              !pendingChat.operation &&
+              pendingChat.job &&
+              ['failed', 'succeeded'].includes(pendingChat.job.status)
+            "
+            class="secondary"
+            @click="leaveConversation"
+          >
+            先聊别的
+          </button>
+        </div>
+        <form
+          ref="composer"
+          class="card composer"
+          aria-label="对话输入"
+          @submit.prevent="send"
+        >
+          <label>
+            <span class="sr-only">说说你的问题</span
+            ><textarea
+              ref="composerInput"
+              v-model="chatDraft"
               required
-              placeholder="有哪些选择？你最在意什么？"
+              maxlength="12000"
+              :disabled="busy || !!pendingChat"
+              :placeholder="
+                newProblem
+                  ? '随便说说现在困扰你的事，不用先想清楚。'
+                  : '接着说…'
+              "
             />
           </label>
-          <details v-if="sources.length">
+          <details v-if="!newProblem && sources.length">
             <summary>选择参考资料（{{ chosenSources.length }}）</summary>
             <label v-for="s in sources" :key="s.id" class="check"
               ><input type="checkbox" :value="s.id" v-model="chosenSources" />{{
@@ -635,7 +702,9 @@ onUnmounted(() => {
               }}</label
             >
           </details>
-          <button :disabled="busy || !content.trim()">发送讨论</button>
+          <button :disabled="busy || !!pendingChat || !chatDraft.trim()">
+            发送
+          </button>
         </form>
       </template>
       <template v-else-if="tab === '资料与主题'">
