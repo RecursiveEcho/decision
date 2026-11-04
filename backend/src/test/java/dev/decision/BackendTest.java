@@ -791,6 +791,17 @@ class BackendTest {
     req(get("/api/v1/health"), null, null, 200);
     req(get("/api/v1/sources"), null, null, 401);
     req(get("/api/v1/status"), "forged", null, 401);
+    String expiredOwner = auth.token("owner", Instant.now().minusSeconds(60));
+    req(get("/api/v1/status"), expiredOwner, null, 401);
+    postJson("/problems", expiredOwner, Json.obj("title", "不得创建", "goal", "过期凭据"), 401);
+    assertTrue(s.all("problem", null).isEmpty());
+    JsonNode device = device();
+    String deviceId = device.path("device").path("id").asText();
+    String expiredDevice = auth.token("device:" + deviceId, Instant.now().minusSeconds(60));
+    req(get("/api/v1/devices/" + deviceId + "/deliveries"), expiredDevice, null, 401);
+    postJson("/devices/" + deviceId + "/heartbeat", expiredDevice,
+        Json.obj("reportedState", "running"), 401);
+    assertEquals("paused", s.get("device", deviceId).path("reportedState").asText());
     JsonNode login =
         postJson("/auth/login", null, Json.obj("accessCode", "synthetic-owner-code"), 200);
     req(get("/api/v1/status"), login.path("accessToken").asText(), null, 200);
