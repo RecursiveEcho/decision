@@ -249,7 +249,8 @@ class Worker {
           }
           if (response.path("evidence").size() > citations.size())
             uncertainties.add("部分模型引用无法核验，已移除；相关陈述未获得来源支持。");
-          if (citations.isEmpty()) uncertainties.add("本回答没有可核验的来源引用，请勿当作已证实的个人事实。");
+          if (citations.isEmpty() && ctx.attachments().descriptions().isEmpty())
+            uncertainties.add("本回答没有可核验的来源引用，请勿当作已证实的个人事实。");
           if (work.path("autoTitle").asBoolean(false)) {
             boolean allowed =
                 s.db.queryForObject(

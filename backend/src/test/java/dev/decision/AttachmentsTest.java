@@ -110,6 +110,15 @@ class AttachmentsTest {
   }
 
   com.sun.net.httpserver.HttpServer model(List<JsonNode> calls) throws Exception {
+    return model(
+        calls,
+        request ->
+            Json.obj("content", "合成附件回答", "evidence", Json.arr(), "uncertainties", Json.arr()));
+  }
+
+  com.sun.net.httpserver.HttpServer model(
+      List<JsonNode> calls, java.util.function.Function<JsonNode, ObjectNode> answer)
+      throws Exception {
     var server =
         com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
     server.createContext(
@@ -129,14 +138,7 @@ class AttachmentsTest {
                                   "message",
                                   Json.obj(
                                       "content",
-                                      Json.obj(
-                                              "content",
-                                              "合成附件回答",
-                                              "evidence",
-                                              Json.arr(),
-                                              "uncertainties",
-                                              Json.arr())
-                                          .toString(),
+                                      answer.apply(calls.get(calls.size() - 1)).toString(),
                                       "reasoning_content",
                                       "synthetic private reasoning"))),
                       "usage",
@@ -250,15 +252,71 @@ class AttachmentsTest {
                 .startsWith("data:image/png;base64,"));
         assertFalse(content.get(0).path("text").asText().contains("base64"));
         assertEquals(level, messages(p).get(1).path("thinking").asText());
+        assertTrue(messages(p).get(1).path("uncertainties").isEmpty());
         assertFalse(messages(p).toString().contains("synthetic private reasoning"));
       }
       post("/problems/" + p + "/messages", Json.obj("content", "继续看上一张图"), 202);
       worker.runOne();
       assertTrue(calls.get(4).path("messages").get(1).path("content").isArray());
+      assertTrue(messages(p).get(3).path("uncertainties").isEmpty());
       request(patch("/api/v1/problems/" + p), Json.obj("goal", "修改合成目标"), 200);
       post("/problems/" + p + "/messages", Json.obj("content", "新的上下文"), 202);
       worker.runOne();
       assertTrue(calls.get(5).path("messages").get(1).path("content").isTextual());
+      assertTrue(messages(p).get(5).path("uncertainties").toString().contains("没有可核验的来源引用"));
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void partialAttachmentsKeepReadNoticesAndInvalidSourceCitationsStillWarn() throws Exception {
+    List<JsonNode> calls = new ArrayList<>();
+    var server =
+        model(
+            calls,
+            request -> {
+              JsonNode raw = request.path("messages").get(1).path("content");
+              JsonNode input =
+                  Json.parse(raw.isArray() ? raw.get(0).path("text").asText() : raw.asText());
+              String attachmentId = input.path("untrustedAttachments").get(0).path("id").asText();
+              return Json.obj(
+                  "content",
+                  "仅依据已读部分回答",
+                  "evidence",
+                  Json.arr()
+                      .add(
+                          Json.obj(
+                              "sourceId", attachmentId, "quote", "不得假作来源", "relation", "supports"))
+                      .add(
+                          Json.obj("sourceId", Json.id(), "quote", "伪造来源", "relation", "supports")),
+                  "uncertainties",
+                  Json.arr());
+            });
+    try {
+      var result =
+          post(
+              "/conversations",
+              body(
+                  "阅读合成文件",
+                  "off",
+                  file(
+                      "long.txt",
+                      "text/plain",
+                      "合成片段".repeat(10000).getBytes(StandardCharsets.UTF_8))),
+              202);
+      String p = result.path("problem").path("id").asText();
+      worker.runOne();
+      assertEquals(
+          "succeeded", job(result.path("job").path("id").asText()).path("status").asText());
+      JsonNode answer = messages(p).get(1);
+      assertEquals(
+          "partial", messages(p).get(0).path("attachments").get(0).path("status").asText());
+      assertTrue(answer.path("content").asText().startsWith("附件读取说明："));
+      assertTrue(answer.path("evidence").isEmpty());
+      assertTrue(answer.path("uncertainties").toString().contains("部分模型引用无法核验"));
+      assertTrue(answer.path("uncertainties").toString().contains("long.txt"));
+      assertFalse(answer.path("uncertainties").toString().contains("本回答没有可核验的来源引用"));
     } finally {
       server.stop(0);
     }
