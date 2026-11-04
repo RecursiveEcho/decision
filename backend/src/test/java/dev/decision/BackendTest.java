@@ -1091,6 +1091,22 @@ class BackendTest {
     assertEquals(
         1,
         req(get("/api/v1/devices/" + id + "/deliveries"), token, null, 200).path("items").size());
+    for (String state : List.of("read", "dismissed")) {
+      JsonNode changed = req(
+          patch("/api/v1/discussions/" + disc.path("id").asText()), owner,
+          Json.obj("status", state), 200);
+      assertEquals(state, changed.path("status").asText());
+      assertTrue(changed.path("snoozeUntil").isNull());
+      JsonNode refreshed = req(get("/api/v1/discussions").param("problemId", p), owner, null, 200);
+      assertEquals(state, refreshed.path("items").get(0).path("status").asText());
+      assertEquals(0,
+          req(get("/api/v1/devices/" + id + "/deliveries"), token, null, 200).path("items").size());
+      req(patch("/api/v1/discussions/" + disc.path("id").asText()), owner,
+          Json.obj("status", "unread"), 200);
+    }
+    req(patch("/api/v1/discussions/" + disc.path("id").asText()), owner,
+        Json.obj("status", "snoozed", "snoozeUntil", Instant.now().minusSeconds(60).toString()), 400);
+    assertEquals("unread", s.get("discussion", disc.path("id").asText()).path("status").asText());
     req(
         patch("/api/v1/discussions/" + disc.path("id").asText()),
         owner,
