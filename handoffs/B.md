@@ -208,3 +208,17 @@ E代码复核发现首次选择第一条历史可能不加载：初始化已sele
 E复核最新全文/截图，确认本轮事实草稿、自动命名、无建档表单和不派整理作业达到试用标准；疲惫回答措辞作为自然语言质量限制保留，不扩张为全面建议可靠保证。E重启backend并ready后，B只读刷新：最终两组和旧报告组实际页面原话/回答可见；本轮6组合成历史标题仍在，消息数量依次1+1、1+1、2+2、2+2、2+2、1+1，与重启前一致，业务写请求0。
 
 随后退出自有测试会话，确认decision.session与decision.chat-session均null，清Cookie与page/context routes，viewportSize=null，再关闭decision-b-chatreal；临时历史验证标签和预览进程此前已关闭，用户decision-b-final未操作。具体只读结果保存在本机JSON的finalRestartReadback段。本轮B网页交付收拢；不将本轮结论外推到真实观察、通知送达或小程序真机。
+
+## 成熟聊天界面重构（2026-11-04 21:02开始，21:19完成B预览自检）
+
+用户经E要求整体重构界面，而非换色。E需求审查与B独立只读实现审查通过；完整应用官方frontend-design技能，实际浏览[assistant-ui](https://www.assistant-ui.com/)与[shadcn sidebar-07](https://ui.shadcn.com/view/new-york-v4/sidebar-07)，操作展开/折叠并保留本机截图。列表页最初空iframe截图不计成品参考，直接预览的reference-shadcn-icon-expanded/collapsed.png才是有效证据。
+
+设计采用白色主区、浅灰260px侧栏、少量品牌绿；直接展示真实历史标题与当前项，收起为56px图标栏，六工具为紧凑图标条。移动端顶栏开抽屉，Escape/遮罩关闭、约束焦点与背景交互、关闭还焦点，跨断点恢复到可见控件。空态一句引导和一体输入面板；780px聊天列、轻用户气泡、无框助手正文、底部粘附输入。没有虚构历史、模型选择器或无功能附件入口。
+
+实现主要在AppSidebar.vue、App.vue、style.css。图标按官方当前文档采用@lucide/vue 1.68.0（v1由lucide-vue-next改名），正文采用markdown-it 15.0.3；禁raw HTML/图片，只允许无账号信息的绝对http(s)链接并加安全新页属性。Markdown标题/列表/段落/代码正常排版，引用与不确定性仍独立可达。新增依赖和锁文件仅web内；API/chatFlow/chatStorage及共享契约未修改，草稿隔离、原始稳定幂等key、失败恢复、同首历史加载与工具能力保留。
+
+验证：构建与28测试通过（原18+10个Markdown安全/正文用例），git diff --check通过。独立5173真实已有合成历史只读验证首次同首选择、切换/折叠、长4消息390滚动，业务写请求0。手机末条正文及展开依据底637.6px、输入dock顶657.5px，完整可读且无横向溢出。抽屉打开focus关闭按钮/main inert/body锁滚，Shift+Tab约束到退出；Escape和遮罩返回打开按钮，跨桌面断点到可见展开按钮且锁滚清除。
+
+独立临时标签拦截所有写请求的故障验证：IME确认Enter不发送，Shift+Enter换行；14行草稿切工具回讨论仍200px且原文保留；普通Enter发起请求但全部在浏览器拦截，3次相同key、未知结果禁新对话/历史、退出清暂存，serverWrites0。明确长回答替身另验证自动跟随底部remaining0.5px、等待中真实wheel上翻后top0不强拉；修复了粘附输入后的scrollIntoView失效及异步刷新跟随竞态，采用主容器滚动+用户交互计数与禁自动锚定。替身不计模型验证，临时标签均清路由/会话并关闭。
+
+E已亲自看新版桌面空态/历史/折叠/390历史/抽屉，整体视觉通过；并加深输入placeholder和关键指引。最终截图本机忽略目录redesign-empty-desktop.png、redesign-history-desktop.png、redesign-history-collapsed.png、redesign-history-mobile.png、redesign-drawer-mobile.png、redesign-empty-mobile.png、redesign-mobile-end-evidence.png。不提交截图或真实记录。B末轮独立只读代码审查通过；待E集成部署后仅验证新资源、折叠/历史、一工具页和窄屏，不重跑模型/后端/旧全流程。用户旧窗口及IAB8088未动。

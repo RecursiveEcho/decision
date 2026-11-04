@@ -11,6 +11,8 @@
     "format": "prettier --write src tests index.html vite.config.ts tsconfig.json package.json"
   },
   "dependencies": {
+    "@lucide/vue": "^1.68.0",
+    "markdown-it": "^15.0.3",
     "vue": "^3.5.0"
   },
   "devDependencies": {

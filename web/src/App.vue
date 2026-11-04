@@ -10,6 +10,9 @@ import {
   waitJob,
 } from "./api";
 import DeviceRegistration from "./DeviceRegistration.vue";
+import AppSidebar from "./AppSidebar.vue";
+import { ArrowUp, Menu, RefreshCw, LoaderCircle, Paperclip } from "@lucide/vue";
+import { renderMarkdown } from "./markdown";
 import { useChatFlow } from "./chatFlow";
 import type {
   Decision,
@@ -30,7 +33,12 @@ const logged = ref(!!token()),
   error = ref(""),
   note = ref(""),
   mock = ref(false);
-const tabs = ["讨论", "资料与主题", "记忆", "议题", "决定与复盘", "服务与观察"];
+const sidebar = ref<InstanceType<typeof AppSidebar> | null>(null);
+const sidebarCollapsed = ref(false);
+const sidebarModal = ref(false);
+const composing = ref(false);
+const mainPane = ref<HTMLElement | null>(null);
+let scrollInteraction = 0;
 const tab = ref("讨论"),
   problems = ref<Problem[]>([]),
   selected = ref("");
@@ -73,9 +81,14 @@ const chat = useChatFlow({
     tab.value = "讨论";
   },
   async refresh() {
+    const pane = mainPane.value;
+    const startingInteraction = scrollInteraction;
+    const follow =
+      !pane || pane.scrollHeight - pane.scrollTop - pane.clientHeight < 220;
     await refresh();
     await nextTick();
-    composer.value?.scrollIntoView({ block: "nearest", behavior: "auto" });
+    if (follow && mainPane.value && scrollInteraction === startingInteraction)
+      mainPane.value.scrollTop = mainPane.value.scrollHeight;
   },
 });
 const pendingChat = chat.pending;
@@ -137,6 +150,33 @@ const displayedProblem = computed({
     note.value = "";
   },
 });
+const emptyConversation = computed(
+  () =>
+    tab.value === "讨论" &&
+    (newProblem.value || !messages.value.length) &&
+    !showPendingSentence.value &&
+    !pendingChat.value,
+);
+function resizeComposer() {
+  const input = composerInput.value;
+  if (!input) return;
+  input.style.height = "auto";
+  input.style.height = `${Math.min(input.scrollHeight, 200)}px`;
+}
+function composerKeydown(event: KeyboardEvent) {
+  if (
+    event.key !== "Enter" ||
+    event.shiftKey ||
+    event.isComposing ||
+    composing.value ||
+    event.keyCode === 229
+  )
+    return;
+  event.preventDefault();
+  if (!busy.value && !pendingChat.value && chatDraft.value.trim()) void send();
+}
+watch(chatDraft, () => void nextTick(resizeComposer));
+watch(composerInput, () => void nextTick(resizeComposer));
 async function openNewProblem() {
   if (busy.value || pendingChat.value) return;
   newProblem.value = true;
@@ -340,6 +380,7 @@ async function job(path: string, body: unknown) {
   if (logged.value && selected.value === id) await load();
 }
 async function send() {
+  if (!chatDraft.value.trim() || pendingChat.value) return;
   await act(() =>
     chat.send(
       newProblem.value ? null : selected.value || null,
@@ -508,123 +549,382 @@ onUnmounted(() => {
       <p v-if="error" role="alert" class="error">{{ error }}</p>
     </form>
   </div>
-  <div v-else class="shell">
-    <aside>
-      <div class="brand">知衡 <span>个人决策工作台</span></div>
-      <button @click="openNewProblem" :disabled="busy || !!pendingChat">
-        ＋ 新对话
-      </button>
-      <details class="sidebar-section" v-if="problems.length">
-        <summary>历史对话</summary>
-        <label
-          >选择对话<select
-            v-model="displayedProblem"
-            :disabled="busy || !!pendingChat"
-          >
-            <option value="" disabled>新对话</option>
-            <option v-for="p in problems" :key="p.id" :value="p.id">
-              {{ p.title }}
-            </option>
-          </select></label
+  <div v-else class="shell" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
+    <AppSidebar
+      ref="sidebar"
+      v-model:collapsed="sidebarCollapsed"
+      :problems="problems"
+      :selected="selected"
+      :new-problem="newProblem"
+      :active-tab="tab"
+      :busy="busy"
+      :pending="!!pendingChat"
+      @new="openNewProblem"
+      @select="displayedProblem = $event"
+      @tool="tab = $event"
+      @logout="logout"
+      @modal="sidebarModal = $event"
+    />
+    <main
+      ref="mainPane"
+      @wheel.passive="scrollInteraction++"
+      @touchmove.passive="scrollInteraction++"
+      @pointerdown="scrollInteraction++"
+      @keydown="scrollInteraction++"
+      :inert="sidebarModal"
+      :class="{ 'chat-page': tab === '讨论', 'empty-chat': emptyConversation }"
+    >
+      <header class="page-header">
+        <button
+          class="icon-button mobile-menu-toggle"
+          aria-label="打开侧栏"
+          title="打开侧栏"
+          aria-controls="app-sidebar"
+          :aria-expanded="sidebarModal"
+          @click="sidebar?.openMenu($event.currentTarget as HTMLElement)"
         >
-      </details>
-      <details class="sidebar-section">
-        <summary>更多工具</summary>
-        <nav>
-          <button
-            v-for="item in tabs"
-            :key="item"
-            :class="{ active: !newProblem && tab === item }"
-            :disabled="
-              busy || (newProblem && item !== '讨论' && item !== '服务与观察')
-            "
-            @click="tab = item"
-          >
-            {{ item }}
-          </button>
-        </nav>
-      </details>
-      <div class="aside-foot">建议供你判断<br />决定由你确认</div>
-      <button class="secondary" @click="logout">退出登录</button>
-    </aside>
-    <main>
-      <header>
-        <div>
-          <h1>
-            {{
-              tab !== "讨论"
-                ? tab
-                : newProblem
-                  ? "想聊点什么？"
-                  : problem?.title || "对话"
-            }}
-          </h1>
-        </div>
-        <button class="secondary" :disabled="busy" @click="act(refresh)">
-          刷新
+          <Menu :size="21" />
+        </button>
+        <h1 :class="{ 'empty-page-title': emptyConversation }">
+          {{
+            tab !== "讨论"
+              ? tab
+              : newProblem
+                ? "知衡"
+                : problem?.title || "对话"
+          }}
+        </h1>
+        <button
+          class="icon-button refresh-button"
+          aria-label="刷新"
+          title="刷新"
+          :disabled="busy"
+          @click="act(refresh)"
+        >
+          <RefreshCw :size="17" :class="{ spinning: busy }" />
         </button>
       </header>
-      <div v-if="error" ref="errorBanner" role="alert" class="error">
-        {{ error }}
-      </div>
-      <div v-if="note" role="status" class="notice">{{ note }}</div>
-      <div v-if="mock && !newProblem" class="error">
-        当前包含测试替身（mock）结果，不代表真实模型验证。
-      </div>
-      <div v-if="busy" role="status" class="muted">
-        {{ tab === "讨论" && pendingChat ? "正在想一想…" : "正在加载…" }}
-      </div>
-      <template v-if="tab === '讨论'">
-        <details v-if="problem" class="conversation-details">
-          <summary>对话信息</summary>
-          <p v-if="problem.goal">目标：{{ problem.goal }}</p>
-          <p v-if="problem.constraints.length">
-            限制：{{ problem.constraints.join("；") }}
-          </p>
-          <p v-if="problem.unknowns.length">
-            待确认：{{ problem.unknowns.join("；") }}
-          </p>
-          <button
-            v-if="!editingGoal"
-            class="secondary"
-            :disabled="busy"
-            @click="openGoalEditor"
-          >
-            {{ problem.goal ? "修改目标" : "补充目标（可选）" }}
-          </button>
-          <form v-else @submit.prevent="saveGoal">
-            <label
-              >更新问题目标<textarea
-                v-model="goalDraft"
-                required
-                :disabled="busy"
-              />
-            </label>
-            <button :disabled="busy || !goalDraft.trim()">保存目标</button>
+      <div class="page-content">
+        <div v-if="error" ref="errorBanner" role="alert" class="error">
+          {{ error }}
+        </div>
+        <div v-if="note" role="status" class="notice">{{ note }}</div>
+        <div v-if="mock && !newProblem" class="error">
+          当前包含测试替身（mock）结果，不代表真实模型验证。
+        </div>
+        <div v-if="busy" role="status" class="loading-status muted">
+          <LoaderCircle :size="15" class="spinning" />
+          {{ tab === "讨论" && pendingChat ? "正在想一想…" : "正在加载…" }}
+        </div>
+        <template v-if="tab === '讨论'">
+          <div v-if="emptyConversation" class="chat-welcome">
+            <span class="welcome-mark" aria-hidden="true">知</span>
+            <h2>从你现在想到的说起。</h2>
+            <p>不用整理好，一句话就可以。</p>
+          </div>
+          <details v-if="problem" class="conversation-details">
+            <summary>对话信息</summary>
+            <p v-if="problem.goal">目标：{{ problem.goal }}</p>
+            <p v-if="problem.constraints.length">
+              限制：{{ problem.constraints.join("；") }}
+            </p>
+            <p v-if="problem.unknowns.length">
+              待确认：{{ problem.unknowns.join("；") }}
+            </p>
             <button
-              type="button"
+              v-if="!editingGoal"
               class="secondary"
               :disabled="busy"
-              @click="editingGoal = false"
+              @click="openGoalEditor"
             >
-              取消修改
+              {{ problem.goal ? "修改目标" : "补充目标（可选）" }}
+            </button>
+            <form v-else @submit.prevent="saveGoal">
+              <label
+                >更新问题目标<textarea
+                  v-model="goalDraft"
+                  required
+                  :disabled="busy"
+                />
+              </label>
+              <button :disabled="busy || !goalDraft.trim()">保存目标</button>
+              <button
+                type="button"
+                class="secondary"
+                :disabled="busy"
+                @click="editingGoal = false"
+              >
+                取消修改
+              </button>
+            </form>
+          </details>
+          <article
+            v-for="m in newProblem ? [] : messages"
+            :key="m.id"
+            class="message"
+            :class="m.role"
+          >
+            <small
+              >{{ m.role === "user" ? "你" : "决策助手" }}
+              <b v-if="m.mode === 'mock'">· 测试替身</b></small
+            >
+            <div
+              v-if="m.role === 'assistant'"
+              class="markdown-body"
+              v-html="renderMarkdown(m.content)"
+            />
+            <p v-else class="pre">{{ m.content }}</p>
+            <details v-if="m.evidence.length || m.uncertainties.length">
+              <summary>查看依据与不确定性</summary>
+              <button
+                v-for="(e, i) in m.evidence"
+                :key="i"
+                class="evidence"
+                :disabled="busy"
+                @click="showSource(e.sourceId)"
+              >
+                {{ evidenceText(e) }}
+              </button>
+              <p v-for="u in m.uncertainties" :key="u">尚不确定：{{ u }}</p>
+            </details>
+          </article>
+          <article v-if="showPendingSentence" class="message user">
+            <small>你</small>
+            <p class="pre">{{ pendingChat!.content }}</p>
+          </article>
+          <div
+            v-if="pendingChat && !busy"
+            class="pending-recovery"
+            role="status"
+          >
+            <p v-if="pendingChat.state === 'stale'">
+              原话还在。对话内容已有变化，请调整后再发。
+            </p>
+            <p
+              v-else-if="
+                !pendingChat.operation && pendingChat.job?.status === 'failed'
+              "
+            >
+              回答暂时没生成，原话已经保存。
+            </p>
+            <p v-else-if="pendingChat.state === 'done'">
+              回答已经生成，正在恢复显示。
+            </p>
+            <p v-else>原话还在，可以接着获取回答。</p>
+            <button v-if="pendingChat.state === 'stale'" @click="editOriginal">
+              调整原话
+            </button>
+            <button v-else @click="act(() => chat.resume(true))">
+              {{ pendingAction }}
+            </button>
+            <button
+              v-if="
+                !pendingChat.operation &&
+                pendingChat.job &&
+                ['failed', 'succeeded'].includes(pendingChat.job.status)
+              "
+              class="secondary"
+              @click="leaveConversation"
+            >
+              先聊别的
+            </button>
+          </div>
+          <div class="composer-dock">
+            <form
+              ref="composer"
+              class="composer"
+              aria-label="对话输入"
+              @submit.prevent="send"
+            >
+              <label>
+                <span class="sr-only">说说你的问题</span
+                ><textarea
+                  ref="composerInput"
+                  v-model="chatDraft"
+                  rows="2"
+                  @input="resizeComposer"
+                  @keydown="composerKeydown"
+                  @compositionstart="composing = true"
+                  @compositionend="composing = false"
+                  required
+                  maxlength="12000"
+                  :disabled="busy || !!pendingChat"
+                  :placeholder="
+                    newProblem ? '说说你的想法，或现在困扰你的事…' : '接着说…'
+                  "
+                />
+              </label>
+              <div class="composer-actions">
+                <details
+                  v-if="!newProblem && sources.length"
+                  class="source-picker"
+                >
+                  <summary>
+                    <Paperclip :size="16" />参考资料<span
+                      v-if="chosenSources.length"
+                      >{{ chosenSources.length }}</span
+                    >
+                  </summary>
+                  <div class="source-options">
+                    <label v-for="s in sources" :key="s.id" class="check"
+                      ><input
+                        type="checkbox"
+                        :value="s.id"
+                        v-model="chosenSources"
+                      />{{ s.title }}</label
+                    >
+                  </div>
+                </details>
+                <span v-else class="composer-key-hint">Shift + Enter 换行</span>
+                <button
+                  class="send-button"
+                  aria-label="发送"
+                  :title="busy ? '正在处理' : '发送'"
+                  :disabled="busy || !!pendingChat || !chatDraft.trim()"
+                >
+                  <LoaderCircle
+                    v-if="busy"
+                    :size="19"
+                    class="spinning"
+                  /><ArrowUp v-else :size="21" />
+                </button>
+              </div>
+            </form>
+            <p class="composer-footnote">建议供你判断，决定由你确认。</p>
+          </div>
+        </template>
+        <template v-else-if="tab === '资料与主题'">
+          <form class="card" @submit.prevent="ingest">
+            <h2>添加资料</h2>
+            <label>标题（可选）<input v-model="sourceTitle" /></label
+            ><label
+              >文章链接<input
+                v-model="sourceUrl"
+                type="url"
+                placeholder="https://…" /></label
+            ><label
+              >或粘贴正文<textarea
+                v-model="sourceText"
+                placeholder="链接无法读取时，可以粘贴正文；同时提供时优先保存正文。"
+              /></label
+            ><button
+              :disabled="busy || (!sourceText.trim() && !sourceUrl.trim())"
+            >
+              保存并整理资料
             </button>
           </form>
-        </details>
-        <article
-          v-for="m in newProblem ? [] : messages"
-          :key="m.id"
-          class="card message"
-          :class="m.role"
-        >
-          <small
-            >{{ m.role === "user" ? "你" : "决策助手" }}
-            <b v-if="m.mode === 'mock'">· 测试替身</b></small
-          >
-          <p class="pre">{{ m.content }}</p>
-          <details v-if="m.evidence.length || m.uncertainties.length">
-            <summary>查看依据与不确定性</summary>
+          <h2>来源 · {{ sources.length }}</h2>
+          <p v-if="!sources.length" class="muted">还没有资料。</p>
+          <article v-for="s in sources" :key="s.id" class="card">
+            <h3>{{ s.title }}</h3>
+            <p>{{ label(s.status) }} · {{ date(s.capturedAt) }}</p>
             <button
+              class="secondary"
+              :disabled="busy"
+              @click="showSource(s.id)"
+            >
+              查看原文
+            </button>
+            <button
+              class="danger"
+              :disabled="busy"
+              @click="remove(`/sources/${s.id}`)"
+            >
+              删除
+            </button>
+          </article>
+          <h2>知识主题</h2>
+          <div v-if="sources.length" class="card">
+            <p>
+              摘要未完成或资料、记忆有变化时，可重新分析已有资料，无需重复上传。Wiki
+              同步仅负责把已有主题写入 Wiki。
+            </p>
+            <button :disabled="busy" @click="reanalyze">重新分析资料</button>
+          </div>
+          <p v-if="!topics.length" class="muted">暂无主题，等待资料处理。</p>
+          <article v-for="t in topics" :key="t.id" class="card">
+            <h3>{{ t.title }}</h3>
+            <p class="pre">{{ t.markdown }}</p>
+            <p>Wiki：{{ label(t.syncStatus) }}</p>
+            <a
+              v-if="safeUrl(t.wikiUrl)"
+              :href="safeUrl(t.wikiUrl)"
+              target="_blank"
+              rel="noopener noreferrer"
+              >查看 Wiki</a
+            >
+            <button
+              class="secondary"
+              :disabled="busy"
+              @click="act(() => job(`/topics/${t.id}/sync`, {}))"
+            >
+              同步 Wiki</button
+            ><button
+              v-for="(e, i) in t.evidence"
+              :key="i"
+              class="evidence"
+              :disabled="busy"
+              @click="showSource(e.sourceId)"
+            >
+              {{ evidenceText(e) }}
+            </button>
+          </article>
+        </template>
+        <template v-else-if="tab === '记忆'">
+          <form
+            class="card"
+            @submit.prevent="
+              act(async () => {
+                await request('/memories', 'POST', {
+                  problemId: selected,
+                  content: memoryText,
+                  kind: 'user_reported',
+                });
+                memoryText = '';
+                await load();
+              })
+            "
+          >
+            <h2>补充本人陈述</h2>
+            <label
+              >希望记住的事实或偏好<textarea
+                v-model="memoryText"
+                required
+              /></label
+            ><button :disabled="busy || !memoryText.trim()">保存陈述</button>
+          </form>
+          <p v-if="!memories.length" class="muted">暂无记忆。</p>
+          <article v-for="m in memories" :key="m.id" class="card">
+            <small
+              >{{ label(m.kind) }} · {{ label(m.status) }} · 版本
+              {{ m.revision }}</small
+            >
+            <p class="pre">{{ m.content }}</p>
+            <button class="secondary" :disabled="busy" @click="changeMemory(m)">
+              纠正
+            </button>
+            <button
+              class="secondary"
+              :disabled="busy || m.status === 'retracted'"
+              @click="
+                act(async () => {
+                  await request(`/memories/${m.id}`, 'PATCH', {
+                    status: 'retracted',
+                    expectedRevision: m.revision,
+                  });
+                  await load();
+                })
+              "
+            >
+              撤销
+            </button>
+            <button
+              class="danger"
+              :disabled="busy"
+              @click="remove(`/memories/${m.id}`)"
+            >
+              删除</button
+            ><button
               v-for="(e, i) in m.evidence"
               :key="i"
               class="evidence"
@@ -633,384 +933,178 @@ onUnmounted(() => {
             >
               {{ evidenceText(e) }}
             </button>
-            <p v-for="u in m.uncertainties" :key="u">尚不确定：{{ u }}</p>
-          </details>
-        </article>
-        <article v-if="showPendingSentence" class="card message user">
-          <small>你</small>
-          <p class="pre">{{ pendingChat!.content }}</p>
-        </article>
-        <div v-if="pendingChat && !busy" class="pending-recovery" role="status">
-          <p v-if="pendingChat.state === 'stale'">
-            原话还在。对话内容已有变化，请调整后再发。
+          </article>
+        </template>
+        <template v-else-if="tab === '议题'"
+          ><p class="muted">
+            值得再次想一想的事。没有议题，也可能意味着暂时无需打扰。
           </p>
-          <p
-            v-else-if="
-              !pendingChat.operation && pendingChat.job?.status === 'failed'
-            "
-          >
-            回答暂时没生成，原话已经保存。
-          </p>
-          <p v-else-if="pendingChat.state === 'done'">
-            回答已经生成，正在恢复显示。
-          </p>
-          <p v-else>原话还在，可以接着获取回答。</p>
-          <button v-if="pendingChat.state === 'stale'" @click="editOriginal">
-            调整原话
-          </button>
-          <button v-else @click="act(() => chat.resume(true))">
-            {{ pendingAction }}
-          </button>
-          <button
-            v-if="
-              !pendingChat.operation &&
-              pendingChat.job &&
-              ['failed', 'succeeded'].includes(pendingChat.job.status)
-            "
-            class="secondary"
-            @click="leaveConversation"
-          >
-            先聊别的
-          </button>
-        </div>
-        <form
-          ref="composer"
-          class="card composer"
-          aria-label="对话输入"
-          @submit.prevent="send"
-        >
-          <label>
-            <span class="sr-only">说说你的问题</span
-            ><textarea
-              ref="composerInput"
-              v-model="chatDraft"
-              required
-              maxlength="12000"
-              :disabled="busy || !!pendingChat"
-              :placeholder="
-                newProblem
-                  ? '随便说说现在困扰你的事，不用先想清楚。'
-                  : '接着说…'
-              "
-            />
-          </label>
-          <details v-if="!newProblem && sources.length">
-            <summary>选择参考资料（{{ chosenSources.length }}）</summary>
-            <label v-for="s in sources" :key="s.id" class="check"
-              ><input type="checkbox" :value="s.id" v-model="chosenSources" />{{
-                s.title
-              }}</label
+          <article v-for="d in discussions" :key="d.id" class="card">
+            <small>{{ label(d.status) }}</small>
+            <h2>{{ d.title }}</h2>
+            <p class="pre">{{ d.reason }}</p>
+            <button
+              v-for="(e, i) in d.evidence"
+              :key="i"
+              class="evidence"
+              :disabled="busy"
+              @click="showSource(e.sourceId)"
             >
-          </details>
-          <button :disabled="busy || !!pendingChat || !chatDraft.trim()">
-            发送
-          </button>
-        </form>
-      </template>
-      <template v-else-if="tab === '资料与主题'">
-        <form class="card" @submit.prevent="ingest">
-          <h2>添加资料</h2>
-          <label>标题（可选）<input v-model="sourceTitle" /></label
-          ><label
-            >文章链接<input
-              v-model="sourceUrl"
-              type="url"
-              placeholder="https://…" /></label
-          ><label
-            >或粘贴正文<textarea
-              v-model="sourceText"
-              placeholder="链接无法读取时，可以粘贴正文；同时提供时优先保存正文。"
-            /></label
-          ><button
-            :disabled="busy || (!sourceText.trim() && !sourceUrl.trim())"
-          >
-            保存并整理资料
-          </button>
-        </form>
-        <h2>来源 · {{ sources.length }}</h2>
-        <p v-if="!sources.length" class="muted">还没有资料。</p>
-        <article v-for="s in sources" :key="s.id" class="card">
-          <h3>{{ s.title }}</h3>
-          <p>{{ label(s.status) }} · {{ date(s.capturedAt) }}</p>
-          <button class="secondary" :disabled="busy" @click="showSource(s.id)">
-            查看原文
-          </button>
-          <button
-            class="danger"
-            :disabled="busy"
-            @click="remove(`/sources/${s.id}`)"
-          >
-            删除
-          </button>
-        </article>
-        <h2>知识主题</h2>
-        <div v-if="sources.length" class="card">
-          <p>
-            摘要未完成或资料、记忆有变化时，可重新分析已有资料，无需重复上传。Wiki
-            同步仅负责把已有主题写入 Wiki。
-          </p>
-          <button :disabled="busy" @click="reanalyze">重新分析资料</button>
-        </div>
-        <p v-if="!topics.length" class="muted">暂无主题，等待资料处理。</p>
-        <article v-for="t in topics" :key="t.id" class="card">
-          <h3>{{ t.title }}</h3>
-          <p class="pre">{{ t.markdown }}</p>
-          <p>Wiki：{{ label(t.syncStatus) }}</p>
-          <a
-            v-if="safeUrl(t.wikiUrl)"
-            :href="safeUrl(t.wikiUrl)"
-            target="_blank"
-            rel="noopener noreferrer"
-            >查看 Wiki</a
-          >
-          <button
-            class="secondary"
-            :disabled="busy"
-            @click="act(() => job(`/topics/${t.id}/sync`, {}))"
-          >
-            同步 Wiki</button
-          ><button
-            v-for="(e, i) in t.evidence"
-            :key="i"
-            class="evidence"
-            :disabled="busy"
-            @click="showSource(e.sourceId)"
-          >
-            {{ evidenceText(e) }}
-          </button>
-        </article>
-      </template>
-      <template v-else-if="tab === '记忆'">
-        <form
-          class="card"
-          @submit.prevent="
-            act(async () => {
-              await request('/memories', 'POST', {
-                problemId: selected,
-                content: memoryText,
-                kind: 'user_reported',
-              });
-              memoryText = '';
-              await load();
-            })
-          "
+              {{ evidenceText(e) }}</button
+            ><button
+              class="secondary"
+              :disabled="busy"
+              @click="discussionState(d, 'read')"
+            >
+              已读
+            </button>
+            <button
+              class="secondary"
+              :disabled="busy"
+              @click="discussionState(d, 'snoozed')"
+            >
+              一小时后
+            </button>
+            <button
+              class="secondary"
+              :disabled="busy"
+              @click="discussionState(d, 'dismissed')"
+            >
+              忽略
+            </button>
+          </article>
+          <div v-if="!discussions.length" class="empty">暂无议题</div></template
         >
-          <h2>补充本人陈述</h2>
-          <label
-            >希望记住的事实或偏好<textarea
-              v-model="memoryText"
-              required
-            /></label
-          ><button :disabled="busy || !memoryText.trim()">保存陈述</button>
-        </form>
-        <p v-if="!memories.length" class="muted">暂无记忆。</p>
-        <article v-for="m in memories" :key="m.id" class="card">
-          <small
-            >{{ label(m.kind) }} · {{ label(m.status) }} · 版本
-            {{ m.revision }}</small
-          >
-          <p class="pre">{{ m.content }}</p>
-          <button class="secondary" :disabled="busy" @click="changeMemory(m)">
-            纠正
-          </button>
-          <button
-            class="secondary"
-            :disabled="busy || m.status === 'retracted'"
-            @click="
-              act(async () => {
-                await request(`/memories/${m.id}`, 'PATCH', {
-                  status: 'retracted',
-                  expectedRevision: m.revision,
-                });
-                await load();
-              })
-            "
-          >
-            撤销
-          </button>
-          <button
-            class="danger"
-            :disabled="busy"
-            @click="remove(`/memories/${m.id}`)"
-          >
-            删除</button
-          ><button
-            v-for="(e, i) in m.evidence"
-            :key="i"
-            class="evidence"
-            :disabled="busy"
-            @click="showSource(e.sourceId)"
-          >
-            {{ evidenceText(e) }}
-          </button>
-        </article>
-      </template>
-      <template v-else-if="tab === '议题'"
-        ><p class="muted">
-          值得再次想一想的事。没有议题，也可能意味着暂时无需打扰。
-        </p>
-        <article v-for="d in discussions" :key="d.id" class="card">
-          <small>{{ label(d.status) }}</small>
-          <h2>{{ d.title }}</h2>
-          <p class="pre">{{ d.reason }}</p>
-          <button
-            v-for="(e, i) in d.evidence"
-            :key="i"
-            class="evidence"
-            :disabled="busy"
-            @click="showSource(e.sourceId)"
-          >
-            {{ evidenceText(e) }}</button
-          ><button
-            class="secondary"
-            :disabled="busy"
-            @click="discussionState(d, 'read')"
-          >
-            已读
-          </button>
-          <button
-            class="secondary"
-            :disabled="busy"
-            @click="discussionState(d, 'snoozed')"
-          >
-            一小时后
-          </button>
-          <button
-            class="secondary"
-            :disabled="busy"
-            @click="discussionState(d, 'dismissed')"
-          >
-            忽略
-          </button>
-        </article>
-        <div v-if="!discussions.length" class="empty">暂无议题</div></template
-      >
-      <template v-else-if="tab === '决定与复盘'">
-        <form class="card" @submit.prevent="confirmDecision">
-          <h2>记录我的决定</h2>
-          <p>只有你确认后才记录，助手的建议不会自动成为决定。</p>
-          <label>我选择<input v-model="choice" required /></label
-          ><label>当时的理由<textarea v-model="rationale" required /></label
-          ><label>预期结果<textarea v-model="outcome" required /></label
-          ><label
-            >计划复盘时间（可选）<input
-              v-model="reviewAt"
-              type="datetime-local" /></label
-          ><button :disabled="busy">确认记录决定</button>
-        </form>
-        <article v-for="d in decisions" :key="d.id" class="card">
-          <small>{{ date(d.confirmedAt) }}</small>
-          <h2>{{ d.choice }}</h2>
-          <p class="pre">当时理由：{{ d.rationale }}</p>
-          <p class="pre">预期结果：{{ d.expectedOutcome }}</p>
-          <button
-            v-for="(e, i) in d.evidence"
-            :key="i"
-            class="evidence"
-            :disabled="busy"
-            @click="showSource(e.sourceId)"
-          >
-            {{ evidenceText(e) }}
-          </button>
-          <section v-for="r in d.reviews" :key="r.id" class="review">
-            <p>结果：{{ r.outcome }}</p>
-            <p>反思：{{ r.reflection }}</p>
-          </section>
-          <button
-            v-if="!reviewDraft[d.id]"
-            class="secondary"
-            @click="reviewDraft[d.id] = { outcome: '', reflection: '' }"
-          >
-            追加复盘
-          </button>
-          <form v-else @submit.prevent="recordReview(d)">
-            <label
-              >实际结果<textarea
-                v-model="reviewDraft[d.id]!.outcome"
-                required
-              /></label
+        <template v-else-if="tab === '决定与复盘'">
+          <form class="card" @submit.prevent="confirmDecision">
+            <h2>记录我的决定</h2>
+            <p>只有你确认后才记录，助手的建议不会自动成为决定。</p>
+            <label>我选择<input v-model="choice" required /></label
+            ><label>当时的理由<textarea v-model="rationale" required /></label
+            ><label>预期结果<textarea v-model="outcome" required /></label
             ><label
-              >反思<textarea
-                v-model="reviewDraft[d.id]!.reflection"
-                required
-              /></label
-            ><button :disabled="busy">保存复盘</button>
+              >计划复盘时间（可选）<input
+                v-model="reviewAt"
+                type="datetime-local" /></label
+            ><button :disabled="busy">确认记录决定</button>
           </form>
-        </article>
-      </template>
-      <template v-else-if="tab === '服务与观察'">
-        <div v-if="status" class="columns">
-          <article class="card">
-            <h2>模型</h2>
-            <p>{{ status.model.configured ? "已配置" : "未配置" }}</p>
-            <p>最近调用：{{ status.model.lastCallStatus || "暂无" }}</p>
+          <article v-for="d in decisions" :key="d.id" class="card">
+            <small>{{ date(d.confirmedAt) }}</small>
+            <h2>{{ d.choice }}</h2>
+            <p class="pre">当时理由：{{ d.rationale }}</p>
+            <p class="pre">预期结果：{{ d.expectedOutcome }}</p>
+            <button
+              v-for="(e, i) in d.evidence"
+              :key="i"
+              class="evidence"
+              :disabled="busy"
+              @click="showSource(e.sourceId)"
+            >
+              {{ evidenceText(e) }}
+            </button>
+            <section v-for="r in d.reviews" :key="r.id" class="review">
+              <p>结果：{{ r.outcome }}</p>
+              <p>反思：{{ r.reflection }}</p>
+            </section>
+            <button
+              v-if="!reviewDraft[d.id]"
+              class="secondary"
+              @click="reviewDraft[d.id] = { outcome: '', reflection: '' }"
+            >
+              追加复盘
+            </button>
+            <form v-else @submit.prevent="recordReview(d)">
+              <label
+                >实际结果<textarea
+                  v-model="reviewDraft[d.id]!.outcome"
+                  required
+                /></label
+              ><label
+                >反思<textarea
+                  v-model="reviewDraft[d.id]!.reflection"
+                  required
+                /></label
+              ><button :disabled="busy">保存复盘</button>
+            </form>
+          </article>
+        </template>
+        <template v-else-if="tab === '服务与观察'">
+          <div v-if="status" class="columns">
+            <article class="card">
+              <h2>模型</h2>
+              <p>{{ status.model.configured ? "已配置" : "未配置" }}</p>
+              <p>最近调用：{{ status.model.lastCallStatus || "暂无" }}</p>
+              <p>
+                请求 {{ status.usage.requests }} · 输入
+                {{ status.usage.inputTokens }} / 输出
+                {{ status.usage.outputTokens }} tokens
+              </p>
+              <p>
+                费用估计：{{
+                  status.usage.costEstimate === null
+                    ? "暂无依据"
+                    : `${status.usage.costEstimate} ${status.usage.currency || ""}`
+                }}
+              </p>
+            </article>
+            <article class="card">
+              <h2>Wiki</h2>
+              <p>
+                {{ status.wiki.configured ? "已配置" : "未配置" }} ·
+                {{ label(status.wiki.status) }}
+              </p>
+              <p>观察最近在线：{{ date(status.observer.lastSeenAt) }}</p>
+            </article>
+          </div>
+          <h2>观察设备</h2>
+          <p>
+            默认关闭。网页授权同步后，仍须在本地明确启动。暂停同步不能证明底层录屏已经停止。
+          </p>
+          <p v-if="!devices.length" class="muted">
+            没有设备，请先在下方注册，再将凭据填入本地适配器。网页不会自动开启采集。
+          </p>
+          <DeviceRegistration
+            :disabled="busy"
+            @registered="
+              (device) => {
+                devices = [
+                  ...devices.filter((d) => d.id !== device.id),
+                  device,
+                ];
+              }
+            "
+          />
+          <article v-for="d in devices" :key="d.id" class="card">
+            <h3>{{ d.name }}</h3>
             <p>
-              请求 {{ status.usage.requests }} · 输入
-              {{ status.usage.inputTokens }} / 输出
-              {{ status.usage.outputTokens }} tokens
-            </p>
-            <p>
-              费用估计：{{
-                status.usage.costEstimate === null
-                  ? "暂无依据"
-                  : `${status.usage.costEstimate} ${status.usage.currency || ""}`
+              同步请求：{{ label(d.desiredState) }} · 设备报告：{{
+                label(d.reportedState)
               }}
             </p>
-          </article>
-          <article class="card">
-            <h2>Wiki</h2>
-            <p>
-              {{ status.wiki.configured ? "已配置" : "未配置" }} ·
-              {{ label(status.wiki.status) }}
+            <p>心跳：{{ date(d.lastHeartbeatAt) }}</p>
+            <p
+              v-if="
+                !d.lastHeartbeatAt ||
+                Date.now() - Date.parse(d.lastHeartbeatAt) > 90000
+              "
+              class="error"
+            >
+              心跳已过期，设备可能离线，实际采集状态未知。
             </p>
-            <p>观察最近在线：{{ date(status.observer.lastSeenAt) }}</p>
+            <p v-if="d.lastError" class="error">{{ d.lastError }}</p>
+            <button :disabled="busy" @click="setDevice(d, 'running')">
+              允许同步（仍需本地启动）
+            </button>
+            <button
+              class="secondary"
+              :disabled="busy"
+              @click="setDevice(d, 'paused')"
+            >
+              请求暂停同步
+            </button>
           </article>
-        </div>
-        <h2>观察设备</h2>
-        <p>
-          默认关闭。网页授权同步后，仍须在本地明确启动。暂停同步不能证明底层录屏已经停止。
-        </p>
-        <p v-if="!devices.length" class="muted">
-          没有设备，请先在下方注册，再将凭据填入本地适配器。网页不会自动开启采集。
-        </p>
-        <DeviceRegistration
-          :disabled="busy"
-          @registered="
-            (device) => {
-              devices = [...devices.filter((d) => d.id !== device.id), device];
-            }
-          "
-        />
-        <article v-for="d in devices" :key="d.id" class="card">
-          <h3>{{ d.name }}</h3>
-          <p>
-            同步请求：{{ label(d.desiredState) }} · 设备报告：{{
-              label(d.reportedState)
-            }}
-          </p>
-          <p>心跳：{{ date(d.lastHeartbeatAt) }}</p>
-          <p
-            v-if="
-              !d.lastHeartbeatAt ||
-              Date.now() - Date.parse(d.lastHeartbeatAt) > 90000
-            "
-            class="error"
-          >
-            心跳已过期，设备可能离线，实际采集状态未知。
-          </p>
-          <p v-if="d.lastError" class="error">{{ d.lastError }}</p>
-          <button :disabled="busy" @click="setDevice(d, 'running')">
-            允许同步（仍需本地启动）
-          </button>
-          <button
-            class="secondary"
-            :disabled="busy"
-            @click="setDevice(d, 'paused')"
-          >
-            请求暂停同步
-          </button>
-        </article>
-      </template>
+        </template>
+      </div>
     </main>
     <div v-if="sourceDetail" class="overlay" @click.self="sourceDetail = null">
       <section
