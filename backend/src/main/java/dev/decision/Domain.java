@@ -38,6 +38,7 @@ class Domain {
 
   ObjectNode editProblem(String id, JsonNode b) {
     ObjectNode p = s.get("problem", id);
+    if (b.has("title")) s.db.update("UPDATE records SET auto_title=false WHERE id=?::uuid", id);
     for (String k : List.of("title", "goal"))
       if (b.has(k)) p.put(k, Json.required(b, k, k.equals("title") ? 300 : 4000));
     for (String k : List.of("constraints", "unknowns")) if (b.has(k)) p.set(k, Json.strings(b, k));
@@ -92,6 +93,58 @@ class Domain {
   }
 
   ObjectNode chat(String id, JsonNode b) {
+    return chat(id, b, false);
+  }
+
+  ObjectNode conversation(JsonNode b) {
+    String content = Json.required(b, "content", 12000);
+    String title =
+        content.strip().split("[\\r\\n。！？!?]", 2)[0].replaceAll("\\p{Cntrl}", " ").strip();
+    if (title.isBlank()) title = "新对话";
+    if (title.codePointCount(0, title.length()) > 40)
+      title = title.substring(0, title.offsetByCodePoints(0, 40)) + "…";
+    ObjectNode problem =
+        s.create(
+            "problem",
+            null,
+            Json.obj(
+                "title", title, "goal", "", "constraints", Json.arr(), "unknowns", Json.arr()));
+    String id = problem.path("id").asText();
+    s.db.update("UPDATE records SET auto_title=true WHERE id=?::uuid", id);
+    ObjectNode job = chat(id, Json.obj("content", content), true);
+    return Json.obj("problem", problem, "job", job);
+  }
+
+  ObjectNode retryChat(String id) {
+    ObjectNode previous = s.get("job", id);
+    id = previous.path("id").asText(); // Canonical parent identity also covers uppercase UUID URLs.
+    if (!previous.path("kind").asText().equals("chat")
+        || !previous.path("status").asText().equals("failed"))
+      throw new ApiError(409, "JOB_NOT_RETRYABLE", "仅失败的聊天任务可以重试");
+    List<String> inputs =
+        s.db.queryForList(
+            "SELECT input::text FROM jobs WHERE id=?::uuid AND state='failed'"
+                + " AND input->>'operation'='chat'",
+            String.class,
+            id);
+    if (inputs.isEmpty()) throw new ApiError(409, "JOB_NOT_RETRYABLE", "仅失败的聊天任务可以重试");
+    List<String> existing =
+        s.db.queryForList(
+            "SELECT id::text FROM jobs WHERE input->>'operation'='chat' AND"
+                + " input->>'retryOfJobId'=?",
+            String.class,
+            id);
+    if (!existing.isEmpty()) return s.get("job", existing.get(0));
+    ObjectNode input = (ObjectNode) Json.parse(inputs.get(0));
+    String p = input.path("problemId").asText();
+    s.get("problem", p);
+    s.requireCurrentUserMessage(p, input.path("userMessageId").asText());
+    input.remove("jobId");
+    input.put("retryOfJobId", id);
+    return s.job("chat", p, input, c.mode());
+  }
+
+  ObjectNode chat(String id, JsonNode b, boolean autoTitle) {
     s.get("problem", id);
     String content = Json.required(b, "content", 12000);
     ArrayNode ids = Json.strings(b, "sourceIds");
@@ -128,7 +181,9 @@ class Domain {
             "sourceIds",
             ids,
             "userMessageId",
-            user.path("id")),
+            user.path("id"),
+            "autoTitle",
+            autoTitle),
         c.mode());
   }
 

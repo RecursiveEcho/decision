@@ -35,6 +35,16 @@ Java 17、Spring Boot 3.5.16、PostgreSQL 16+、Flyway；运行接口见 [openap
 - `/health` 只报告应用可用，不返回密钥；异常与上游失败不返回原始响应或敏感正文。数据库直连避免桌面系统 SOCKS 代理误接管 JDBC，不改变系统网络配置。
 
 
+## 一句话开启对话与失败恢复
+
+`POST /api/v1/conversations` 只需 `{content}`（非空、最多12000字符），owner Bearer 与 Idempotency-Key，立即返回 `202 {problem,job}`。同一事务保存问题、完整首条用户消息和chat Job，队列满等同步失败全部回滚；同key同内容重放不重复创建。新入口的goal为空串、constraints/unknowns为空，不把困扰自动认定为目标或本人记忆。旧 `/problems` 仍要求非空title/goal。
+
+初始名称截取首句最多40个Unicode码点；首答同一次模型调用可返回可选 `conversationTitle`（最多80字符）。缺失、类型不对、空白、过长或控制字符时忽略名称，不使正文失败。内部V4 `auto_title`默认false，旧数据不回填；仅新首句及其失败重试可命名。人工PATCH title关闭标记，自动命名不bump版本；人工修改仍保留原有上下文失效保护，可能使在途任务返回CONTEXT_CHANGED。
+
+`POST /api/v1/jobs/{id}/retry` body严格为`{}`，同样需要owner及幂等键。仅失败chat可重试；复用原userMessageId，不重复用户气泡、不重置旧Job。每个失败Job通过内部retryOfJobId和唯一索引最多派生一个子任务；不同key、并发或大小写UUID路径都复用它，即使它已失败。再次尝试须针对新的失败Job。没有子任务时，原消息已删除或上下文已变更返回409 CONTEXT_CHANGED；已有子任务仅返回，不启动新工作，worker执行时仍校验上下文。非failed/nonchat返回409 JOB_NOT_RETRYABLE。
+
+模型提示改为先给贴合困扰的轻量帮助，默认2–4短句，最多一个必要追问，不要求先填表或上传资料；无来源允许一般建议及空引用。整理只呈现在正文，不自动写目标、约束、未知、记忆或决定。接口/事务由隔离测试验证，实际首答质量必须另做真实模型与UI验收。
+
 ## 显式重新分析与模型诊断
 
 `POST /api/v1/problems/{id}/analyze`，body `{}`，owner Bearer + `Idempotency-Key`，返回202 analysis Job。已有queued/running分析时复用任务；否则创建新任务并读取当前来源/记忆，不复制Source或用户Message，旧失败Job保留。缺少来源返回400/NO_SOURCES。此接口由E统一补入共享契约，用于网页“重新分析资料”。

@@ -1,14 +1,14 @@
 # A 后端回执
 
-状态：A连续追问修复已部署，V3迁移成功；33项隔离测试及JAR构建通过，B真实连续追问通过，A独立引用/Wiki回读通过。开始时间：2026-11-04 17:29:59 Asia/Shanghai；首版完成17:59；格式恢复18:57；本轮自测19:23开始，连续追问修复19:29完成，真实复验结果见文末。整轮网页收尾由E汇总，用户亲自验收尚未完成。
+状态：此前完整网页轮次已收拢；当前按用户新目标改为一句话开聊。A原子首句/失败原话重试/同次自动命名已实现，42项隔离测试通过，等待E集成真实体验验收。此前V3连续追问已部署并真实复验。开始时间：2026-11-04 17:29:59 Asia/Shanghai；本轮chat-first于20:07开始，20:16代码复核及隔离验证完成。用户亲自验收尚未完成。
 
 工作区 `decision-worktrees/backend`，分支 `feat/mvp-backend`，共同基线 `2fcea57`；独立只读审查已通过。本对话经用户明确分配为 A，仅修改 `backend/` 与 `handoffs/A.md`，不负责根目录或 E 集成。
 
 ## 当前可交付状态
 
 - Java 17 / Spring Boot 3.5.16 / PostgreSQL / Flyway；契约全部路由、OpenAPI、Maven wrapper、非root Dockerfile、独立数据库测试脚本、真实服务 smoke 脚本已交付。
-- 已部署功能代码 `cadf9ae`（连续追问上下文与内部V3迁移）；`6ac25d8`、`60bf741`仅补议题与过期凭据隔离测试/回执。E运行唯一后端，不能另起共享库worker。
-- 必要验证：`backend/test.sh` 在独立一次性 PostgreSQL 上 **33项全部通过**；`mvnw -DskipTests package` 成功。测试报告在本地 `backend/target/surefire-reports`、`target/test-run.log`，不上传运行日志。
+- 已部署基线 `cadf9ae`及随后测试回执；本次提交新增chat-first与内部V4迁移，待E部署。E运行唯一后端，不能另起共享库worker。
+- 必要验证：`backend/test.sh` 在独立一次性 PostgreSQL 上 **42项全部通过**。测试报告在本地 `backend/target/surefire-reports`、`target/test-run.log`，不上传运行日志；本轮JAR构建结果见文末。
 - A亲自执行的真实外部证据：后端→DeepSeek真实回答含5条逐字来源引用并回查通过；Wiki.js 2.5.317真实创建/同页更新/全文读回通过。只使用合成资料。
 - E于17:58的协调状态报告：增强smoke已通过“两篇相关文章→真实主题摘要→同一Wiki页面更新→本人确认决定→追加复盘”，网页/后端已切Docker；仍在做容器复验与带业务数据备份恢复。此条是E报告，A未另起共享库worker复跑。
 - 真实观察、桌面通知本人可见、手机通知、小程序真机、服务器部署和用户验收：**未由A验证**。采集从未由A开启；未改TGA。
@@ -120,3 +120,14 @@
 - B重新分析后，A直接读真实API及Wiki GraphQL：2条活动来源（HTTP与粘贴正文），唯一Topic revision8、仍是Wiki页面7，3条主题引用均逐字匹配当前问题活动来源；真实Wiki全文与Topic.markdown完全相同。失效提示已消失、Wiki仍非公开发布；本人记忆保持retracted。
 - B真实新首答与追问的Job均succeeded且mode=real。A独立回查两条助手消息合计10条引用，全部能定位当前来源并逐字匹配；追问准确复述上一条临时代号及第2点“核实营业、准备备选”，追问用户消息没有透露代号。本人撤销记忆及其来源没有重新出现在当前引用或回答中，未把系统推断当本人事实。
 - 本批是实际DeepSeek与Wiki链路，隔离HTTP夹具和真实服务证据严格分开。此前的追问失败Job/历史回答仍保留，不用删失败记录伪造成功。A等待E最终网页退出、视口清理和持久化验收汇总，不声称真实观察、通知本人看到或小程序真机已经完成。
+
+## 新用户目标：一句话开聊（2026-11-04 20:07开始，Asia/Shanghai）
+
+- E转达用户疲惫时不应先填标题/目标/限制/未知，先只读评估，再依E固定的CONTRACT与CHAT_FIRST实施；两次独立只读审查及最终diff复核通过。只改A目录，未操作线上数据或共享服务。
+- 新owner `POST /conversations {content}`：非空至多12000字符，原子202 `{problem,job}`；完整原话只存user消息，goal空串、arrays空，初始title截取首句最多40码点；旧 `/problems` 非空title/goal校验保持。相同幂等键不重复，同步队列满回滚问题、消息和key。
+- 新owner `POST /jobs/{id}/retry {}`：仅failed chat。每失败Job通过持久化retryOfJobId、唯一索引及事务锁只派生一条；不同key/并发/UUID大小写也复用该子任务，子任务失败继续针对新Job重试。复用原userMessageId，不重复原话。原消息已删除/版本过期阻止新派生；已有派生只返回，worker仍复核上下文。旧失败Job保留。
+- V4新增内部auto_title列默认false，不回填旧数据；首句及其retry与正文同次模型可选conversationTitle，异常字段忽略。人工改名关闭标记；自动命名不bump、不覆盖人工名。人工PATCH仍保留原有版本失效行为，没有放宽目标/记忆撤销保护。
+- Prompt明确默认2–4短句先帮助、最多一个必要问题、不每次强问、不列填表清单/要求先上传资料。无来源可一般建议但不造事实/引用，整理只在正文，不自动存goal/constraints/unknowns/memory/decision。此体验要求要由E/B真实模型验收，字符串或HTTP夹具测试不冒充通过。
+- 20:15最终 **42项隔离测试全通过**（0fail/errors/skipped）；新增9项覆盖原子与重放、队列满回滚、单次模型命名与历史保留、7类可选坏title、人工改回原名保护、失败重试链/原话复用、越权及过期/删除上下文、重试队列满、四线程并发唯一派生。首次队列满夹具错误使用analysis触发原有单问题唯一约束，已改为普通chat满队列并实际验证回滚；不是线上故障。
+- OpenAPI与backend README同步两条新接口、错误码及恢复边界。无共享契约私改，无真实密钥/个人资料/截图/运行库提交。待E部署V4和B真实首答/追问/刷新恢复体验后追加最终证据。
+- 20:17 `mvnw -DskipTests package` 成功；OpenAPI JSON及本地引用完整性检查通过。提交前diff/暂存清单仅A业务与回执文件，未包含运行日志或私有配置。

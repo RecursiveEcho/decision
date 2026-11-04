@@ -98,6 +98,24 @@ class Api {
     return post(r, b, 201, () -> d.problem(b));
   }
 
+  @PostMapping("/conversations")
+  ResponseEntity<?> conversation(@RequestBody JsonNode b, HttpServletRequest r) {
+    return post(r, b, 202, () -> d.conversation(b));
+  }
+
+  @PostMapping("/jobs/{id}/retry")
+  ResponseEntity<?> retry(@PathVariable String id, @RequestBody JsonNode b, HttpServletRequest r) {
+    return post(
+        r,
+        b,
+        202,
+        () -> {
+          if (!b.isObject() || !b.isEmpty())
+            throw new ApiError(400, "INVALID_REQUEST", "重试请求体必须为{}对象");
+          return d.retryChat(id);
+        });
+  }
+
   @PatchMapping("/problems/{id}")
   ObjectNode problem(@PathVariable String id, @RequestBody JsonNode b) {
     return s.write(() -> d.editProblem(id, b));

@@ -237,6 +237,26 @@ class Worker {
           if (response.path("evidence").size() > citations.size())
             uncertainties.add("部分模型引用无法核验，已移除；相关陈述未获得来源支持。");
           if (citations.isEmpty()) uncertainties.add("本回答没有可核验的来源引用，请勿当作已证实的个人事实。");
+          if (work.path("autoTitle").asBoolean(false)) {
+            boolean allowed =
+                s.db.queryForObject(
+                    "SELECT auto_title FROM records WHERE id=?::uuid AND kind='problem' AND NOT"
+                        + " deleted",
+                    Boolean.class,
+                    p);
+            JsonNode candidate = response.path("conversationTitle");
+            if (allowed && candidate.isTextual()) {
+              String title = candidate.asText().strip();
+              if (!title.isBlank()
+                  && title.length() <= 80
+                  && title.codePoints().noneMatch(Character::isISOControl)) {
+                ObjectNode problem = s.get("problem", p);
+                problem.put("title", title);
+                s.save("problem", problem);
+              }
+            }
+            s.db.update("UPDATE records SET auto_title=false WHERE id=?::uuid", p);
+          }
           ObjectNode assistant =
               s.create(
                   "message",
