@@ -1294,3 +1294,21 @@ summary {
   font-size: 13px;
   color: var(--muted);
 }
+/* Keep file drafts in a single horizontal strip, leaving the conversation readable. */
+.attachment-list {
+  align-items: flex-start;
+}
+.composer .attachment-list {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding: 6px 6px 8px;
+  margin: -6px -6px 6px;
+}
+.composer .attachment-item {
+  flex-shrink: 0;
+}
+@media (max-width: 760px) {
+  .composer .attachment-item:not(.image-attachment) .attachment-open {
+    width: 180px;
+  }
+}
