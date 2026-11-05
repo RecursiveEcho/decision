@@ -1,6 +1,15 @@
 <script setup lang="ts">
 import "./library.css";
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import "./knowledgeGraph.css";
+import {
+  computed,
+  defineAsyncComponent,
+  nextTick,
+  onMounted,
+  onUnmounted,
+  ref,
+  watch,
+} from "vue";
 import {
   ArrowLeft,
   ArrowUpRight,
@@ -12,6 +21,8 @@ import {
   FolderOpen,
   HelpCircle,
   LoaderCircle,
+  Network,
+  List,
   Plus,
   Search,
   X,
@@ -29,6 +40,12 @@ import { renderMarkdown } from "./markdown";
 import EvidencePanel from "./EvidencePanel.vue";
 import KnowledgeReadScope from "./KnowledgeReadScope.vue";
 import KnowledgeReferences from "./KnowledgeReferences.vue";
+import { domainColor } from "./knowledgeGraph";
+const KnowledgeGraph = defineAsyncComponent(
+  () => import("./KnowledgeGraph.vue"),
+);
+const graphView = ref(true);
+const graph = ref<{ choose: (id: string) => Promise<void> }>();
 const props = defineProps<{
   sources: Source[];
   topics: Topic[];
@@ -52,7 +69,7 @@ const emit = defineEmits<{
   "update:url": [value: string];
 }>();
 const reader = useLibraryReader();
-const kind = ref<LibraryKind>("source"),
+const kind = ref<LibraryKind>("knowledge"),
   query = ref(""),
   domain = ref(""),
   selected = ref(""),
@@ -196,6 +213,11 @@ function keyMove(event: KeyboardEvent, index: number) {
       [next]?.focus(),
   );
 }
+function revealGraph(id: string) {
+  query.value = "";
+  domain.value = "";
+  void nextTick(() => graph.value?.choose(id));
+}
 function selectRelated(id: string) {
   const row = rows.value.find((r) => r.kind === "knowledge" && r.id === id);
   if (!row) return;
@@ -207,7 +229,8 @@ async function refreshKnowledge() {
   await reader.load();
 }
 defineExpose({ refresh: reader.refresh });
-watch(visible, (values) => {
+watch([visible, graphView], ([values]) => {
+  if (kind.value === "knowledge" && graphView.value) return;
   if (current.value) return;
   detailOpen.value = false;
   if (values.length) void select(values[0], false);
@@ -235,6 +258,26 @@ onUnmounted(reader.stop);
     :class="{ 'show-reader': detailOpen }"
   >
     <div class="library-toolbar">
+      <div
+        v-if="kind === 'knowledge'"
+        class="graph-view-switch"
+        aria-label="知识视图"
+      >
+        <button
+          :aria-pressed="graphView"
+          aria-label="图谱视图"
+          @click="graphView = true"
+        >
+          <Network :size="16" /><span>图谱</span>
+        </button>
+        <button
+          :aria-pressed="!graphView"
+          aria-label="列表视图"
+          @click="graphView = false"
+        >
+          <List :size="16" /><span>列表</span>
+        </button>
+      </div>
       <label class="library-search"
         ><Search :size="18" /><span class="sr-only">搜索资料库</span
         ><input
@@ -388,10 +431,32 @@ onUnmounted(reader.stop);
         :aria-pressed="domain === item"
         @click="domain = item"
       >
-        {{ item }}
+        <i
+          v-if="graphView"
+          class="graph-domain-dot"
+          :style="{ background: domainColor(item) }"
+        />{{ item }}
       </button>
     </div>
-    <div class="library-workspace">
+    <KnowledgeGraph
+      v-if="kind === 'knowledge' && graphView"
+      ref="graph"
+      :entries="
+        reader.entries.value.filter((entry) =>
+          visible.some((row) => row.id === entry.id),
+        )
+      "
+      :all-entries="reader.entries.value"
+      :sources="sources"
+      :loading="reader.loading.value"
+      :error="reader.knowledgeError.value"
+      :can-navigate="canNavigate && !busy"
+      @source="emit('source', $event)"
+      @conversation="emit('conversation', $event)"
+      @retry="refreshKnowledge"
+      @reveal="revealGraph"
+    />
+    <div v-else class="library-workspace">
       <section
         ref="listPane"
         class="library-browser"
