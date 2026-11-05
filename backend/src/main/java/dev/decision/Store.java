@@ -19,8 +19,7 @@ class Store {
     this.tx = new TransactionTemplate(tm);
   }
 
-  // Single owner: one transaction lock provides deterministic idempotency/revisions/consent
-  // ordering.
+  // Shared transaction lock serializes idempotency, job claiming and aggregate revisions.
   <T> T write(Supplier<T> action) {
     return tx.execute(
         s -> {
@@ -35,8 +34,9 @@ class Store {
     if (!data.has("createdAt")) data.put("createdAt", now);
     if (!data.has("updatedAt")) data.put("updatedAt", now);
     db.update(
-        "INSERT INTO records(id,kind,problem_id,data,context_revision)"
-            + " VALUES (?::uuid,?,?::uuid,?::jsonb,?)",
+        "INSERT INTO records(account_id,id,kind,problem_id,data,context_revision)"
+            + " VALUES (?::uuid,?::uuid,?,?::uuid,?::jsonb,?)",
+        AccountScope.id(),
         data.path("id").asText(),
         kind,
         problemId,
@@ -49,12 +49,25 @@ class Store {
     Json.uuid(id);
     List<String> r =
         db.queryForList(
-            "SELECT data::text FROM records WHERE id=?::uuid AND kind=? AND NOT deleted",
+            "SELECT data::text FROM records WHERE id=?::uuid AND kind=? AND NOT deleted AND"
+                + " account_id=?::uuid",
             String.class,
             id,
-            kind);
+            kind,
+            AccountScope.id());
     if (r.isEmpty()) throw new ApiError(404, "NOT_FOUND", "记录不存在或已删除");
     return (ObjectNode) Json.parse(r.get(0));
+  }
+
+  boolean deletedHere(String kind, String id) {
+    return Boolean.TRUE.equals(
+        db.queryForObject(
+            "SELECT EXISTS(SELECT 1 FROM records WHERE account_id=?::uuid AND id=?::uuid AND kind=?"
+                + " AND deleted)",
+            Boolean.class,
+            AccountScope.id(),
+            id,
+            kind));
   }
 
   ObjectNode save(String kind, ObjectNode data) {
@@ -79,23 +92,40 @@ class Store {
   }
 
   List<ObjectNode> all(String kind, String problemId) {
-    String q = "SELECT data::text FROM records WHERE kind=? AND NOT deleted";
-    Object[] args = {kind};
+    String q = "SELECT data::text FROM records WHERE account_id=?::uuid AND kind=? AND NOT deleted";
+    Object[] args = {AccountScope.id(), kind};
     if (problemId != null) {
       Json.uuid(problemId);
       q += " AND problem_id=?::uuid";
-      args = new Object[] {kind, problemId};
+      args = new Object[] {AccountScope.id(), kind, problemId};
     }
     return db.query(
         q + " ORDER BY created_at,id", (rs, i) -> (ObjectNode) Json.parse(rs.getString(1)), args);
   }
 
   long version() {
-    return db.queryForObject("SELECT revision FROM context_version WHERE id=1", Long.class);
+    return db.queryForObject(
+        "SELECT revision FROM context_version WHERE account_id=?::uuid",
+        Long.class,
+        AccountScope.id());
   }
 
   void bump() {
-    db.update("UPDATE context_version SET revision=revision+1 WHERE id=1");
+    db.update(
+        "UPDATE context_version SET revision=revision+1 WHERE account_id=?::uuid",
+        AccountScope.id());
+  }
+
+  long memoryEpoch() {
+    return db.queryForObject(
+        "SELECT epoch FROM chat_memory_state WHERE account_id=?::uuid",
+        Long.class,
+        AccountScope.id());
+  }
+
+  void bumpMemoryEpoch() {
+    db.update(
+        "UPDATE chat_memory_state SET epoch=epoch+1 WHERE account_id=?::uuid", AccountScope.id());
   }
 
   void requireCurrentUserMessage(String problemId, String messageId) {
@@ -109,23 +139,26 @@ class Store {
         || db.queryForObject(
                 "SELECT count(*) FROM records WHERE id=?::uuid AND problem_id=?::uuid AND"
                     + " kind='message' AND NOT deleted AND data->>'role'='user' AND"
-                    + " context_revision=?",
+                    + " context_revision=? AND account_id=?::uuid",
                 Integer.class,
                 messageId,
                 problemId,
-                version())
+                version(),
+                AccountScope.id())
             != 1) throw new ApiError(409, "CONTEXT_CHANGED", "原话对应的资料或记忆已更正，请保留原话并调整后重新发送", true);
   }
 
   boolean jobRunning(JsonNode work) {
     return Boolean.TRUE.equals(
         db.queryForObject(
-            "SELECT state='running' FROM jobs WHERE id=?::uuid",
+            "SELECT state='running' FROM jobs WHERE account_id=?::uuid AND id=?::uuid",
             Boolean.class,
+            AccountScope.id(),
             work.path("jobId").asText()));
   }
 
   ObjectNode job(String operation, String problemId, ObjectNode input, String mode) {
+    // This is the shared worker's capacity, never a user-facing usage count.
     if (db.queryForObject(
             "SELECT count(*) FROM jobs WHERE state IN ('queued','running')", Integer.class)
         >= 200) throw new ApiError(429, "JOB_QUEUE_FULL", "后台队列繁忙，请稍后提交", true);
@@ -146,7 +179,9 @@ class Store {
             Json.obj(
                 "kind", kind, "status", "queued", "result", null, "error", null, "mode", mode));
     db.update(
-        "INSERT INTO jobs(id,problem_id,input) VALUES (?::uuid,?::uuid,?::jsonb)",
+        "INSERT INTO jobs(account_id,id,problem_id,input) VALUES"
+            + " (?::uuid,?::uuid,?::uuid,?::jsonb)",
+        AccountScope.id(),
         j.path("id").asText(),
         problemId,
         input.toString());

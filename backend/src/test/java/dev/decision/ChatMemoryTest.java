@@ -23,7 +23,7 @@ import org.springframework.boot.test.context.SpringBootTest;
       "app.mock=false",
       "app.worker-enabled=false"
     })
-class ChatMemoryTest {
+class ChatMemoryTest extends AdminFixture {
   @Autowired Store s;
   @Autowired ChatMemory memory;
 
@@ -141,8 +141,12 @@ class ChatMemoryTest {
     ChatMemory.Snapshot snapshot = memory.retrieve(p, "回答");
     var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
     try {
-      var a = executor.submit(() -> apply(p, first, add("我喜欢简短回答", "global"), snapshot).size());
-      var b = executor.submit(() -> apply(p, second, add("我喜欢简短回答", "global"), snapshot).size());
+      var a =
+          executor.submit(
+              asAdmin(() -> apply(p, first, add("我喜欢简短回答", "global"), snapshot).size()));
+      var b =
+          executor.submit(
+              asAdmin(() -> apply(p, second, add("我喜欢简短回答", "global"), snapshot).size()));
       assertEquals(
           1,
           a.get(10, java.util.concurrent.TimeUnit.SECONDS)

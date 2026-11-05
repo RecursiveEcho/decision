@@ -23,7 +23,7 @@ import org.springframework.boot.test.context.SpringBootTest;
       "app.mock=false",
       "app.worker-enabled=false"
     })
-class DecisionCaptureTest {
+class DecisionCaptureTest extends AdminFixture {
   @Autowired Store s;
   @Autowired DecisionCapture capture;
   String problem;
@@ -465,11 +465,12 @@ class DecisionCaptureTest {
       for (int i = 0; i < 4; i++)
         responses.add(
             pool.submit(
-                () ->
-                    capture
-                        .capture(problem, mid, candidate("我决定选择方案乙", "方案乙"))
-                        .path("id")
-                        .asText()));
+                asAdmin(
+                    () ->
+                        capture
+                            .capture(problem, mid, candidate("我决定选择方案乙", "方案乙"))
+                            .path("id")
+                            .asText())));
       Set<String> ids = new HashSet<>();
       for (Future<String> response : responses) ids.add(response.get(10, TimeUnit.SECONDS));
       assertEquals(1, ids.size());

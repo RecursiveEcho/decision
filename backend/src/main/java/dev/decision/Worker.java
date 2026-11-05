@@ -48,10 +48,15 @@ class Worker {
   void recover() {
     s.write(
         () -> {
-          List<String> ids =
-              s.db.queryForList("SELECT id::text FROM jobs WHERE state='running'", String.class);
-          for (String id : ids)
-            fail(id, new ApiError(503, "PROCESS_RESTARTED", "服务重启中断了任务；请明确重试", true));
+          for (var row :
+              s.db.queryForList(
+                  "SELECT id::text,account_id::text FROM jobs WHERE state='running'")) {
+            try (var scope = AccountScope.enter((String) row.get("account_id"))) {
+              fail(
+                  (String) row.get("id"),
+                  new ApiError(503, "PROCESS_RESTARTED", "服务重启中断了任务；请明确重试", true));
+            }
+          }
           return null;
         });
     ready = true;
@@ -62,34 +67,51 @@ class Worker {
     if (ready && enabled) runOne();
   }
 
+  private record Claimed(String accountId, ObjectNode input) {}
+
   synchronized boolean runOne() {
-    ObjectNode work =
-        s.write(
-            () -> {
-              List<Map<String, Object>> jobs =
-                  s.db.queryForList(
-                      "SELECT id::text,input::text FROM jobs WHERE state='queued' ORDER BY"
-                          + " CASE WHEN input->>'operation'='memory_overview' THEN 1 ELSE 0 END,"
-                          + " created_at,id LIMIT 1 FOR UPDATE SKIP LOCKED");
-              if (jobs.isEmpty()) return null;
-              String id = (String) jobs.get(0).get("id");
-              ObjectNode input = (ObjectNode) Json.parse((String) jobs.get(0).get("input"));
-              input.put("jobId", id);
-              ObjectNode job = s.get("job", id);
-              job.put("status", "running");
-              s.save("job", job);
-              s.db.update("UPDATE jobs SET state='running' WHERE id=?::uuid", id);
-              if (input.path("operation").asText().equals("analysis")) {
-                List<String> ps =
-                    s.db.queryForList(
-                        "SELECT problem_id::text FROM jobs WHERE id=?::uuid", String.class, id);
-                input.put("problemId", ps.get(0));
-                s.db.update(
-                    "UPDATE analysis_pending SET dirty=false WHERE problem_id=?::uuid", ps.get(0));
-              }
-              return input;
-            });
-    if (work == null) return false;
+    Claimed claimed = s.write(this::claim);
+    if (claimed == null) return false;
+    try (var scope = AccountScope.enter(claimed.accountId())) {
+      process(claimed.input());
+    }
+    return true;
+  }
+
+  private Claimed claim() {
+    // Scheduler sees only ownership and identifiers across accounts; input is read within scope.
+    var rows =
+        s.db.queryForList(
+            "SELECT id::text,account_id::text FROM jobs WHERE state='queued' ORDER BY"
+                + " CASE WHEN input->>'operation'='memory_overview' THEN 1 ELSE 0 END,"
+                + " created_at,id LIMIT 1 FOR UPDATE SKIP LOCKED");
+    if (rows.isEmpty()) return null;
+    String account = (String) rows.get(0).get("account_id");
+    String id = (String) rows.get(0).get("id");
+    try (var scope = AccountScope.enter(account)) {
+      var row =
+          s.db.queryForMap(
+              "SELECT input::text,problem_id::text FROM jobs WHERE account_id=?::uuid AND"
+                  + " id=?::uuid",
+              account,
+              id);
+      ObjectNode input = (ObjectNode) Json.parse((String) row.get("input"));
+      input.put("jobId", id);
+      ObjectNode job = s.get("job", id);
+      job.put("status", "running");
+      s.save("job", job);
+      s.db.update(
+          "UPDATE jobs SET state='running' WHERE id=?::uuid AND account_id=?::uuid", id, account);
+      if (input.path("operation").asText().equals("analysis")) {
+        String p = (String) row.get("problem_id");
+        input.put("problemId", p);
+        s.db.update("UPDATE analysis_pending SET dirty=false WHERE problem_id=?::uuid", p);
+      }
+      return new Claimed(account, input);
+    }
+  }
+
+  private void process(ObjectNode work) {
     try {
       switch (work.path("operation").asText()) {
         case "ingest" -> ingest(work);
@@ -138,7 +160,6 @@ class Worker {
               return null;
             });
     }
-    return true;
   }
 
   void success(String id, ObjectNode result) {

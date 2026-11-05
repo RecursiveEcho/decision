@@ -58,7 +58,17 @@ def route(method,path,response,code=200,body=None,required=None,query=(),public=
     paths.setdefault(path,{})[method]=operation
 
 route('get','/health',obj({'status':enum('ok'),'version':string()}),public=True)
-route('post','/auth/login',obj({'accessToken':string(),'expiresAt':time}),body={'accessCode':string()},public=True)
+schemas['Account'] = obj({'id':uuid, 'username':string(), 'role':enum('admin','member')})
+schemas['Credentials'] = obj({'username':string(pattern='^[A-Za-z0-9_][A-Za-z0-9_.-]{2,31}$'),
+                              'password':string(minLength=12,maxLength=128,writeOnly=True)})
+schemas['Credentials']['additionalProperties'] = False
+schemas['Session'] = obj({'accessToken':string(), 'expiresAt':time, 'account':ref('Account')})
+route('post','/auth/login',ref('Session'),body={},public=True)
+route('post','/auth/register',ref('Session'),201,body={},public=True)
+route('get','/auth/me',ref('Account'))
+paths['/auth/register']['post']['requestBody']['content']['application/json']['schema'] = ref('Credentials')
+paths['/auth/login']['post']['requestBody']['content']['application/json']['schema'] = {
+    'oneOf':[ref('Credentials'),{**obj({'accessCode':string(writeOnly=True)}),'additionalProperties':False}]}
 route('get','/status',ref('Status'))
 route('post','/problems',ref('Problem'),201,{'title':string(),'goal':string(),'constraints':arr(),'unknowns':arr()},['title','goal'])
 route('patch','/problems/{id}',ref('Problem'),body={'title':string(),'goal':string(),'constraints':arr(),'unknowns':arr()},required=[])
@@ -95,7 +105,7 @@ route('post','/deliveries/{id}/ack',ref('Delivery'),body={'status':enum('sent','
 for resource,name in [('problems','Problem'),('sources','Source'),('memories','Memory'),('topics','Topic'),('discussions','Discussion'),('decisions','Decision'),('devices','Device')]:
     query=['cursor','limit']+([] if resource in ['problems','devices'] else ['problemId'])+(['status'] if resource=='discussions' else [])
     route('get','/'+resource,obj({'items':arr(ref(name)),'nextCursor':string(True)}),query=query)
-spec={'openapi':'3.0.3','info':{'title':'Decision MVP API','version':'1.0.0','description':'Single-owner CONTRACT v1. No registration. Device tokens are restricted to heartbeat, observation upload, own deliveries/acks and owned jobs. Mock mode is explicit and disabled by default.'},'servers':[{'url':'/api/v1'}],'security':[{'bearerAuth':[]}],'paths':paths,'components':{'securitySchemes':{'bearerAuth':{'type':'http','scheme':'bearer'}},'schemas':schemas}}
+spec={'openapi':'3.0.3','info':{'title':'Decision MVP API','version':'1.0.0','description':'Account-isolated API with self-service registration and legacy administrator login. Device tokens are restricted to heartbeat, observation upload, own deliveries/acks and owned jobs. Mock mode is explicit and disabled by default.'},'servers':[{'url':'/api/v1'}],'security':[{'bearerAuth':[]}],'paths':paths,'components':{'securitySchemes':{'bearerAuth':{'type':'http','scheme':'bearer'}},'schemas':schemas}}
 if '--knowledge-only' in sys.argv:
     # Later modules already augmented the checked-in description; keep their schemas/routes.
     current=json.loads(Path(__file__).resolve().parents[1].joinpath('openapi.json').read_text())

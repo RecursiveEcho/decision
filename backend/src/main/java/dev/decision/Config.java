@@ -49,7 +49,7 @@ public class Config {
   }
 
   boolean wikiConfigured() {
-    return !wikiBase.isBlank() && !wikiToken.isBlank();
+    return AccountScope.admin() && !wikiBase.isBlank() && !wikiToken.isBlank();
   }
 
   String mode() {

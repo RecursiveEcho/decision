@@ -64,10 +64,18 @@ class Auth {
       String subject = body.substring(0, i);
       if (Instant.ofEpochSecond(Long.parseLong(body.substring(i + 1))).isBefore(Instant.now()))
         throw new IllegalArgumentException();
-      if (!subject.equals("owner")) {
-        if (!subject.startsWith("device:")) throw new IllegalArgumentException();
-        store.get("device", subject.substring(7));
-      }
+      if (subject.startsWith("account:")) {
+        String account = Json.uuid(subject.substring(8));
+        if (!Boolean.TRUE.equals(
+            store.db.queryForObject(
+                "SELECT EXISTS(SELECT 1 FROM accounts WHERE id=?::uuid)", Boolean.class, account)))
+          throw new IllegalArgumentException();
+      } else if (subject.startsWith("device:")) {
+        // Legacy devices have always belonged to the migrated administrator.
+        try (AccountScope ignored = AccountScope.enter(AccountScope.ADMIN)) {
+          store.get("device", subject.substring(7));
+        }
+      } else if (!subject.equals("owner")) throw new IllegalArgumentException();
       return subject;
     } catch (Exception e) {
       throw new ApiError(401, "UNAUTHORIZED", "登录已过期或凭据无效");
@@ -78,32 +86,6 @@ class Auth {
     return MessageDigest.isEqual(
         hash(code).getBytes(StandardCharsets.UTF_8),
         hash(config.ownerCode).getBytes(StandardCharsets.UTF_8));
-  }
-
-  void checkLoginRate(String address) {
-    String h = hash(address);
-    store.write(
-        () -> {
-          store.db.update(
-              "DELETE FROM login_attempts WHERE window_start < now()-interval '5 minutes'");
-          return null;
-        });
-    List<Integer> n =
-        store.db.queryForList(
-            "SELECT failures FROM login_attempts WHERE address_hash=?", Integer.class, h);
-    if (!n.isEmpty() && n.get(0) >= 10)
-      throw new ApiError(429, "LOGIN_RATE_LIMIT", "尝试过多，请五分钟后重试", true);
-  }
-
-  void failedLogin(String address) {
-    store.write(
-        () -> {
-          store.db.update(
-              "INSERT INTO login_attempts VALUES (?,1,now()) ON CONFLICT(address_hash) DO UPDATE"
-                  + " SET failures=login_attempts.failures+1",
-              hash(address));
-          return null;
-        });
   }
 
   // Idempotent login/device responses contain tokens; encrypt them at rest.

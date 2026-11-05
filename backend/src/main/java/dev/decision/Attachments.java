@@ -10,6 +10,12 @@ import org.springframework.stereotype.Component;
 
 @Component
 class Attachments {
+  // Attachment ownership follows its original message and its conversation.
+  private static final String OWNED =
+      " AND EXISTS (SELECT 1 FROM records m JOIN records p ON p.id=m.problem_id AND"
+          + " p.account_id=m.account_id WHERE m.id=attachments.message_id AND"
+          + " p.id=attachments.problem_id AND m.account_id=?::uuid AND NOT m.deleted AND NOT"
+          + " p.deleted)";
   final Store s;
 
   Attachments(Store s) {
@@ -170,11 +176,10 @@ class Attachments {
     Json.uuid(id);
     List<Binary> rows =
         s.db.query(
-            "SELECT a.bytes,a.metadata::text FROM attachments a JOIN records m ON m.id=a.message_id"
-                + " JOIN records p ON p.id=a.problem_id WHERE a.id=?::uuid AND NOT m.deleted AND"
-                + " NOT p.deleted",
+            "SELECT bytes,metadata::text FROM attachments WHERE id=?::uuid" + OWNED,
             (rs, i) -> new Binary(rs.getBytes(1), (ObjectNode) Json.parse(rs.getString(2))),
-            id);
+            id,
+            AccountScope.id());
     if (rows.isEmpty()) throw new ApiError(404, "NOT_FOUND", "附件不存在或已删除");
     return rows.get(0);
   }
@@ -183,9 +188,12 @@ class Attachments {
     ArrayNode meta = Json.arr();
     s.db
         .queryForList(
-            "SELECT metadata::text FROM attachments WHERE message_id=?::uuid ORDER BY position",
+            "SELECT metadata::text FROM attachments WHERE message_id=?::uuid"
+                + OWNED
+                + " ORDER BY position",
             String.class,
-            message.path("id").asText())
+            message.path("id").asText(),
+            AccountScope.id())
         .forEach(raw -> meta.add(Json.parse(raw)));
     message.set("attachments", meta);
     if (!message.has("thinking")) message.put("thinking", "off");
@@ -199,9 +207,12 @@ class Attachments {
             () -> {
               s.requireCurrentUserMessage(p, message);
               return s.db.queryForList(
-                  "SELECT id::text FROM attachments WHERE message_id=?::uuid ORDER BY position",
+                  "SELECT id::text FROM attachments WHERE message_id=?::uuid"
+                      + OWNED
+                      + " ORDER BY position",
                   String.class,
-                  message);
+                  message,
+                  AccountScope.id());
             });
     for (String id : ids) {
       Binary binary = get(id);
@@ -222,9 +233,10 @@ class Attachments {
         s.write(
             () -> {
               s.db.update(
-                  "UPDATE attachments SET metadata=?::jsonb,parsed=NULL WHERE id=?::uuid",
+                  "UPDATE attachments SET metadata=?::jsonb,parsed=NULL WHERE id=?::uuid" + OWNED,
                   meta.toString(),
-                  id);
+                  id,
+                  AccountScope.id());
               return null;
             });
         throw e;
@@ -237,9 +249,11 @@ class Attachments {
     s.db.update(
         "UPDATE attachments SET"
             + " metadata=jsonb_set(jsonb_set(metadata,'{status}','\"failed\"'::jsonb),'{error}',?::jsonb)"
-            + " WHERE message_id=?::uuid AND metadata->>'status' IN ('pending','processing')",
+            + " WHERE message_id=?::uuid AND metadata->>'status' IN ('pending','processing')"
+            + OWNED,
         error.detail().toString(),
-        message);
+        message,
+        AccountScope.id());
   }
 
   void update(String id, String p, String message, ObjectNode meta, ObjectNode parsed) {
@@ -247,10 +261,15 @@ class Attachments {
         () -> {
           s.requireCurrentUserMessage(p, message);
           s.db.update(
-              "UPDATE attachments SET metadata=?::jsonb,parsed=?::jsonb WHERE id=?::uuid",
+              "UPDATE attachments SET metadata=?::jsonb,parsed=?::jsonb WHERE id=?::uuid AND"
+                  + " message_id=?::uuid AND problem_id=?::uuid"
+                  + OWNED,
               meta.toString(),
               parsed == null ? null : parsed.toString(),
-              id);
+              id,
+              message,
+              p,
+              AccountScope.id());
           return null;
         });
   }
@@ -267,9 +286,10 @@ class Attachments {
       List<Map<String, Object>> rows =
           s.db.queryForList(
               "SELECT a.id::text,a.bytes,a.metadata::text,a.parsed::text FROM attachments a JOIN"
-                  + " records m ON m.id=a.message_id WHERE a.message_id=?::uuid AND"
-                  + " a.problem_id=?::uuid AND m.context_revision=? AND NOT m.deleted ORDER BY"
-                  + " a.position",
+                  + " records m ON m.id=a.message_id AND m.problem_id=a.problem_id WHERE"
+                  + " m.account_id=?::uuid AND a.message_id=?::uuid AND a.problem_id=?::uuid AND"
+                  + " m.context_revision=? AND NOT m.deleted ORDER BY a.position",
+              AccountScope.id(),
               message,
               p,
               revision);

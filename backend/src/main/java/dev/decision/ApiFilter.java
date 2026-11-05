@@ -23,10 +23,21 @@ class ApiFilter extends OncePerRequestFilter {
     res.setHeader("X-Content-Type-Options", "nosniff");
     try {
       String p = req.getRequestURI();
-      if (!p.equals("/api/v1/health") && !p.equals("/api/v1/auth/login")) {
+      // Spring may match a decoded route or strip matrix parameters; cache keys and
+      // device capabilities must refer to exactly the same path as the controller.
+      if (!p.matches("/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*"))
+        throw new ApiError(400, "INVALID_PATH", "API 路径须使用规范格式");
+      String accountId = null;
+      if (!p.equals("/api/v1/health")
+          && !p.equals("/api/v1/auth/login")
+          && !p.equals("/api/v1/auth/register")) {
         String who = auth.verify(req.getHeader("Authorization"));
-        req.setAttribute("subject", who);
-        if (!who.equals("owner")) {
+        accountId = who.startsWith("account:") ? who.substring(8) : AccountScope.ADMIN;
+        // Preserve the old admin idempotency scope, including when using a new account token.
+        req.setAttribute(
+            "subject",
+            who.startsWith("account:") && accountId.equals(AccountScope.ADMIN) ? "owner" : who);
+        if (who.startsWith("device:")) {
           String id = who.substring(7);
           String m = req.getMethod();
           boolean allowed =
@@ -82,7 +93,9 @@ class ApiFilter extends OncePerRequestFilter {
               }
             };
       }
-      chain.doFilter(wrapped, res);
+      try (AccountScope ignored = accountId == null ? null : AccountScope.enter(accountId)) {
+        chain.doFilter(wrapped, res);
+      }
     } catch (ApiError e) {
       res.setStatus(e.status);
       res.setContentType("application/json;charset=UTF-8");

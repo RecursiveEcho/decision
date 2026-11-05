@@ -34,7 +34,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
       "app.worker-enabled=false"
     })
 @AutoConfigureMockMvc
-class MemoryOverviewTest {
+class MemoryOverviewTest extends AdminFixture {
   @Autowired MockMvc mvc;
   @Autowired Store s;
   @Autowired Auth auth;

@@ -31,7 +31,7 @@ class ChatMemory {
   }
 
   long epoch() {
-    return s.db.queryForObject("SELECT epoch FROM chat_memory_state WHERE id=1", Long.class);
+    return s.memoryEpoch();
   }
 
   long currentEpoch() {
@@ -44,9 +44,11 @@ class ChatMemory {
     for (JsonNode seen : snapshot.memories()) {
       List<String> rows =
           s.db.queryForList(
-              "SELECT data::text FROM records WHERE id=?::uuid AND kind='memory' AND NOT deleted",
+              "SELECT data::text FROM records WHERE id=?::uuid AND account_id=?::uuid AND"
+                  + " kind='memory' AND NOT deleted",
               String.class,
-              seen.path("id").asText());
+              seen.path("id").asText(),
+              AccountScope.id());
       if (rows.isEmpty()) throw new ApiError(409, "CONTEXT_CHANGED", "引用的记忆已删除，请重新提问", true);
       JsonNode now = Json.parse(rows.get(0));
       if (!now.path("status").asText().equals("active")
@@ -60,9 +62,10 @@ class ChatMemory {
     if (problemId == null) return s.all("memory", null);
     Json.uuid(problemId);
     return s.db.query(
-        "SELECT data::text FROM records WHERE kind='memory' AND NOT deleted"
+        "SELECT data::text FROM records WHERE kind='memory' AND account_id=?::uuid AND NOT deleted"
             + " AND (problem_id=?::uuid OR data->>'scope'='global') ORDER BY created_at,id",
         (rs, i) -> (ObjectNode) Json.parse(rs.getString(1)),
+        AccountScope.id(),
         problemId);
   }
 
@@ -128,11 +131,17 @@ class ChatMemory {
       return changes;
     }
     if (s.db.queryForObject(
-            "SELECT memory_epoch FROM records WHERE id=?::uuid", Long.class, userMessageId)
+            "SELECT memory_epoch FROM records WHERE id=?::uuid AND account_id=?::uuid",
+            Long.class,
+            userMessageId,
+            AccountScope.id())
         != snapshot.epoch()) return changes;
     long sourceSeq =
         s.db.queryForObject(
-            "SELECT chat_source_seq FROM records WHERE id=?::uuid", Long.class, userMessageId);
+            "SELECT chat_source_seq FROM records WHERE id=?::uuid AND account_id=?::uuid",
+            Long.class,
+            userMessageId,
+            AccountScope.id());
     if (s.db.update(
             "INSERT INTO chat_memory_processed(message_id,source_seq,epoch) VALUES (?::uuid,?,?)"
                 + " ON CONFLICT DO NOTHING",
@@ -258,7 +267,7 @@ class ChatMemory {
       changes.add(change(action, target));
       changedExisting = true;
     }
-    if (changedExisting) s.db.update("UPDATE chat_memory_state SET epoch=epoch+1 WHERE id=1");
+    if (changedExisting) s.bumpMemoryEpoch();
     return changes;
   }
 
@@ -271,13 +280,16 @@ class ChatMemory {
           s.db.update(
               "UPDATE chat_memory_meta SET protected=true WHERE memory_id=?::uuid",
               before.path("id").asText());
-          s.db.update("UPDATE chat_memory_state SET epoch=epoch+1 WHERE id=1");
+          s.bumpMemoryEpoch();
           return null;
         });
   }
 
   private long highWater() {
-    return s.db.queryForObject("SELECT coalesce(max(chat_source_seq),0) FROM records", Long.class);
+    return s.db.queryForObject(
+        "SELECT coalesce(max(chat_source_seq),0) FROM records WHERE account_id=?::uuid",
+        Long.class,
+        AccountScope.id());
   }
 
   private void tombstone(ObjectNode memory, long through) {
@@ -285,9 +297,11 @@ class ChatMemory {
         memory.path("scope").asText().equals("global") ? "*" : memory.path("problemId").asText();
     String text = normalize(memory.path("content").asText());
     s.db.update(
-        "INSERT INTO chat_memory_tombstones(scope_key,fact_key,fact_text,blocked_through_seq)"
-            + " VALUES (?,?,?,?) ON CONFLICT(scope_key,fact_key) DO UPDATE SET"
+        "INSERT INTO"
+            + " chat_memory_tombstones(account_id,scope_key,fact_key,fact_text,blocked_through_seq)"
+            + " VALUES (?::uuid,?,?,?,?) ON CONFLICT(account_id,scope_key,fact_key) DO UPDATE SET"
             + " blocked_through_seq=greatest(chat_memory_tombstones.blocked_through_seq,excluded.blocked_through_seq)",
+        AccountScope.id(),
         scopeKey,
         factKey(text),
         text,
@@ -298,9 +312,10 @@ class ChatMemory {
     String normalized = normalize(content);
     for (String old :
         s.db.queryForList(
-            "SELECT fact_text FROM chat_memory_tombstones WHERE scope_key IN (?, '*')"
-                + " AND blocked_through_seq>=?",
+            "SELECT fact_text FROM chat_memory_tombstones WHERE account_id=?::uuid AND scope_key IN"
+                + " (?, '*') AND blocked_through_seq>=?",
             String.class,
+            AccountScope.id(),
             scopeKey,
             seq))
       if (normalized.equals(old) || normalized.contains(old) || old.contains(normalized))
@@ -313,8 +328,10 @@ class ChatMemory {
     for (String current :
         s.db.queryForList(
             "SELECT r.data->>'content' FROM chat_memory_meta m JOIN records r ON r.id=m.memory_id"
-                + " WHERE m.scope_key=? AND NOT r.deleted AND r.data->>'status'='active'",
+                + " WHERE r.account_id=?::uuid AND m.scope_key=? AND NOT r.deleted AND"
+                + " r.data->>'status'='active'",
             String.class,
+            AccountScope.id(),
             scopeKey)) if (key.equals(factKey(current))) return true;
     return false;
   }
