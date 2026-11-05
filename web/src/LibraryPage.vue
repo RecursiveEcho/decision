@@ -48,6 +48,7 @@ const graphView = ref(true);
 const graph = ref<{ choose: (id: string) => Promise<void> }>();
 const props = defineProps<{
   sources: Source[];
+  canUseWiki: boolean;
   topics: Topic[];
   problems: Problem[];
   contextId: string;
@@ -340,7 +341,7 @@ onUnmounted(reader.stop);
         资料保留原文，主题由 AI
         自动整理。聊清楚后，在对话中点“整理入库”，由你确认后才成为知识。
       </p>
-      <details>
+      <details v-if="canUseWiki">
         <summary>在 Obsidian 中查看</summary>
         <p>
           打开本机
@@ -689,7 +690,7 @@ onUnmounted(reader.stop);
               :busy="busy"
               @open="(id, quotes) => emit('source', id, quotes)"
             />
-            <details class="library-secondary-actions">
+            <details v-if="canUseWiki" class="library-secondary-actions">
               <summary>整理与 Wiki</summary>
               <p class="muted">
                 Wiki：{{

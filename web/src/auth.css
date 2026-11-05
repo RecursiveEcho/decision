@@ -1,0 +1,122 @@
+.auth-screen {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: clamp(32px, 8vh, 88px) 24px 40px;
+  background:
+    radial-gradient(ellipse at 50% 0, var(--brand-soft), transparent 55%),
+    var(--surface);
+}
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 550;
+  margin-bottom: 44px;
+}
+.auth-card {
+  width: min(100%, 360px);
+}
+.auth-card h1 {
+  font-size: 26px;
+  font-weight: 550;
+  letter-spacing: -0.5px;
+}
+.auth-intro {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 12px 0 28px;
+}
+.auth-card label {
+  font-size: 13px;
+  margin: 18px 0 6px;
+}
+.auth-card input {
+  margin-top: 8px;
+  height: 44px;
+}
+.auth-password {
+  position: relative;
+}
+.auth-password input {
+  padding-right: 44px;
+}
+.auth-password .icon-button {
+  position: absolute;
+  right: 5px;
+  top: 12px;
+  width: 30px;
+  height: 30px;
+}
+.auth-hint {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.7;
+  margin: 5px 0 0;
+}
+.auth-error {
+  color: var(--danger);
+  font-size: 12px;
+  margin-top: 16px;
+}
+.auth-submit {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 13px;
+  min-height: 44px;
+  margin-top: 26px;
+}
+.auth-switch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 12px;
+  margin-top: 25px;
+  color: var(--muted);
+}
+.auth-switch button,
+.auth-admin {
+  background: transparent;
+  font-size: 12px;
+  color: var(--brand);
+  padding: 4px;
+}
+.auth-switch button:hover,
+.auth-admin:hover {
+  background: transparent;
+  text-decoration: underline;
+}
+.auth-admin {
+  margin-top: 24px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.auth-admin-hint {
+  margin-top: 15px;
+}
+.sidebar-account-name {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  margin-left: auto;
+}
+.collapsed .sidebar-account-name {
+  display: none;
+}
+@media (max-width: 760px) {
+  .sidebar .sidebar-account-name {
+    display: inline;
+  }
+  .auth-brand {
+    margin-bottom: 30px;
+  }
+}

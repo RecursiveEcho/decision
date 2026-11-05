@@ -68,6 +68,7 @@ describe("API boundary", () => {
       accessToken: "test-only",
       expiresAt: new Date(Date.now() + 60000).toISOString(),
     });
+    ended.mockClear();
     const fetch = vi.fn().mockResolvedValue(json({}, 401));
     vi.stubGlobal("fetch", fetch);
     await expect(request("/sources")).rejects.toMatchObject({ status: 401 });
@@ -144,5 +145,98 @@ describe("API boundary", () => {
     await vi.runAllTimersAsync();
     await p;
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+it("a late old-account 401 cannot log out a newly installed account", async () => {
+  setSession({
+    accessToken: "old-account",
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+  });
+  let finish!: (response: Response) => void;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    ),
+  );
+  const pending = request("/sources");
+  const rejected = expect(pending).rejects.toMatchObject({ status: 499 });
+  setSession({
+    accessToken: "new-account",
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+  });
+  finish(json({}, 401));
+  await rejected;
+  expect(token()).toBe("new-account");
+});
+
+it("installing an account aborts an old write and prevents its retry", async () => {
+  setSession({
+    accessToken: "old-account",
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+  });
+  const fetch = vi.fn(
+    (_url, options) =>
+      new Promise((_resolve, reject) =>
+        options.signal.addEventListener("abort", () =>
+          reject(new Error("aborted")),
+        ),
+      ),
+  );
+  vi.stubGlobal("fetch", fetch);
+  const pending = request("/sources", "POST", { text: "synthetic" });
+  const rejected = expect(pending).rejects.toMatchObject({ status: 499 });
+  setSession({
+    accessToken: "new-account",
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+  });
+  await rejected;
+  await vi.runAllTimersAsync();
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(token()).toBe("new-account");
+});
+
+it("bad credentials report the authentication error without treating it as an expired workspace", async () => {
+  ended.mockClear();
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValue(
+        json({ error: { message: "用户名或密码不正确" } }, 401),
+      ),
+  );
+  await expect(
+    request("/auth/login", "POST", {
+      username: "synthetic",
+      password: "incorrect",
+    }),
+  ).rejects.toThrow("用户名或密码不正确");
+  expect(ended).not.toHaveBeenCalled();
+});
+
+it("persists only approved session and account fields, never an echoed password", () => {
+  const value = {
+    accessToken: "synthetic",
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    account: {
+      id: "a",
+      username: "a_name",
+      role: "member" as const,
+      password: "must not persist",
+    },
+    password: "must not persist",
+  };
+  setSession(value);
+  const saved = JSON.parse(sessionStorage.getItem("decision.session")!);
+  expect(saved.password).toBeUndefined();
+  expect(saved.account).toEqual({
+    id: "a",
+    username: "a_name",
+    role: "member",
   });
 });
