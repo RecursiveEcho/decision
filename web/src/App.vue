@@ -100,6 +100,7 @@ async function readProblem(id: string) {
 }
 async function openConversation(id: string) {
   if (!id || busy.value || pendingChat.value) return;
+  const interaction = scrollInteraction;
   await act(async () => {
     const item = await readProblem(id);
     if (!item) {
@@ -120,6 +121,13 @@ async function openConversation(id: string) {
     displayedProblem.value = id;
     await nextTick();
     await load();
+    await nextTick();
+    if (
+      messages.value.at(-1)?.knowledgeSuggestion?.jobId &&
+      interaction === scrollInteraction &&
+      mainPane.value
+    )
+      mainPane.value.scrollTop = mainPane.value.scrollHeight;
   });
 }
 const messages = ref<Message[]>([]),
