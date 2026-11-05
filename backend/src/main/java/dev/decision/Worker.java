@@ -103,7 +103,7 @@ class Worker {
     } catch (ApiError e) {
       s.write(
           () -> {
-            if (cancelled(work)) return null;
+            if (!s.jobRunning(work)) return null;
             fail(work.path("jobId").asText(), e);
             if (work.path("operation").asText().equals("analysis"))
               summaryFailed(work.path("problemId").asText(), e);
@@ -119,7 +119,7 @@ class Worker {
     } catch (Exception e) {
       s.write(
           () -> {
-            if (cancelled(work)) return null;
+            if (!s.jobRunning(work)) return null;
             fail(
                 work.path("jobId").asText(), new ApiError(500, "JOB_FAILED", "后台处理失败；请明确重试", true));
             return null;
@@ -139,14 +139,6 @@ class Worker {
             });
     }
     return true;
-  }
-
-  boolean cancelled(ObjectNode work) {
-    return Boolean.TRUE.equals(
-        s.db.queryForObject(
-            "SELECT state='cancelled' FROM jobs WHERE id=?::uuid",
-            Boolean.class,
-            work.path("jobId").asText()));
   }
 
   void success(String id, ObjectNode result) {
@@ -266,6 +258,7 @@ class Worker {
     s.write(
         () -> {
           s.get("problem", p);
+          if (!s.jobRunning(work)) return null;
           current(ctx);
           String content = Json.required(response, "content", 20000);
           ArrayNode citations = model.citations(response.get("evidence"), ctx, evidence);
@@ -340,6 +333,10 @@ class Worker {
               "UPDATE records SET memory_epoch=? WHERE id=?::uuid",
               replyEpoch,
               work.path("userMessageId").asText());
+          JsonNode suggest = response.path("suggestKnowledge");
+          if (suggest.isBoolean() && suggest.booleanValue())
+            knowledge.suggest(
+                p, work.path("userMessageId").asText(), assistant.path("id").asText());
           success(
               work.path("jobId").asText(),
               Json.obj(

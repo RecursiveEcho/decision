@@ -296,18 +296,31 @@ class Api {
       @RequestParam(required = false) String problemId,
       @RequestParam(required = false) String cursor,
       @RequestParam(defaultValue = "30") int limit) {
-    if (problemId != null) s.get("problem", problemId);
-    return d.page(
-        s.all("knowledge_proposal", problemId),
-        "updatedAt",
-        cursor,
-        limit,
-        "knowledge-proposals:" + problemId);
+    return s.write(
+        () -> {
+          if (problemId != null) s.get("problem", problemId);
+          ObjectNode page =
+              d.page(
+                  s.all("knowledge_proposal", problemId),
+                  "updatedAt",
+                  cursor,
+                  limit,
+                  "knowledge-proposals:" + problemId);
+          Map<String, String> fingerprints = new HashMap<>();
+          for (JsonNode proposal : page.path("items"))
+            knowledge.addFreshness((ObjectNode) proposal, fingerprints);
+          return page;
+        });
   }
 
   @GetMapping("/knowledge-proposals/{id}")
   ObjectNode knowledgeProposal(@PathVariable String id) {
-    return s.get("knowledge_proposal", id);
+    return s.write(
+        () -> {
+          ObjectNode proposal = s.get("knowledge_proposal", id);
+          knowledge.addFreshness(proposal, new HashMap<>());
+          return proposal;
+        });
   }
 
   @PostMapping("/knowledge-proposals/{id}/accept")

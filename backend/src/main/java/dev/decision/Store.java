@@ -117,6 +117,14 @@ class Store {
             != 1) throw new ApiError(409, "CONTEXT_CHANGED", "原话对应的资料或记忆已更正，请保留原话并调整后重新发送", true);
   }
 
+  boolean jobRunning(JsonNode work) {
+    return Boolean.TRUE.equals(
+        db.queryForObject(
+            "SELECT state='running' FROM jobs WHERE id=?::uuid",
+            Boolean.class,
+            work.path("jobId").asText()));
+  }
+
   ObjectNode job(String operation, String problemId, ObjectNode input, String mode) {
     if (db.queryForObject(
             "SELECT count(*) FROM jobs WHERE state IN ('queued','running')", Integer.class)

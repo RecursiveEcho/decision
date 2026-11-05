@@ -40,6 +40,9 @@ knowledge_fields={'problemId':uuid,'title':string(maxLength=160),'markdown':stri
 entity('KnowledgeEntry',{**knowledge_fields,'revision':{'type':'integer'},'proposalId':uuid,'coverage':ref('KnowledgeCoverage')})
 entity('KnowledgeProposal',{**knowledge_fields,'status':enum('pending','accepted','dismissed'),'action':enum('create','merge','revise','skip'),'reason':string(maxLength=2000),'targetEntryId':string(True,format='uuid'),'targetRevision':{'type':'integer','nullable':True},'contextFingerprint':string(),'coverage':ref('KnowledgeCoverage')})
 
+# Read-time metadata is optional on historical messages and persisted proposal records.
+schemas['KnowledgeProposal']['properties']['requiresRefresh'] = {'type':'boolean','description':'Computed on GET for pending proposals. True means the original snapshot or references are stale; confirmation will recheck.'}
+schemas['Message']['properties']['knowledgeSuggestion'] = obj({'jobId':uuid})
 def route(method,path,response,code=200,body=None,required=None,query=(),public=False):
     operation={'operationId':method+'_'+path.strip('/').replace('/','_').replace('{','').replace('}',''),'responses':{str(code):{'description':'Success'}}}
     if response is not None: operation['responses'][str(code)]['content']={'application/json':{'schema':response}}
