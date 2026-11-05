@@ -66,23 +66,27 @@ class Model {
               work.hasNonNull("userMessageId") ? work.path("userMessageId").asText() : null;
           if (currentMessage != null
               && s.db.queryForObject(
-                      "SELECT memory_epoch FROM records WHERE id=?::uuid",
+                      "SELECT memory_epoch FROM records WHERE account_id=?::uuid AND id=?::uuid",
                       Long.class,
+                      AccountScope.id(),
                       currentMessage)
                   != memorySnapshot.epoch())
             throw new ApiError(409, "CONTEXT_CHANGED", "发送后记忆已更正或撤销，请重新说明当前情况", true);
           List<String> messages =
               s.db.queryForList(
-                  "SELECT data::text FROM records WHERE kind='message' AND NOT deleted AND"
-                      + " problem_id=?::uuid AND context_revision=? AND memory_epoch=? AND (?::uuid"
-                      + " IS NULL OR (created_at,id) <= (SELECT created_at,id FROM records WHERE"
-                      + " id=?::uuid)) ORDER BY created_at DESC,id DESC LIMIT 12",
+                  "SELECT data::text FROM records WHERE account_id=?::uuid AND kind='message' AND"
+                      + " NOT deleted AND problem_id=?::uuid AND context_revision=? AND"
+                      + " memory_epoch=? AND (?::uuid IS NULL OR (created_at,id) <= (SELECT"
+                      + " created_at,id FROM records WHERE id=?::uuid AND account_id=?::uuid))"
+                      + " ORDER BY created_at DESC,id DESC LIMIT 12",
                   String.class,
+                  AccountScope.id(),
                   p,
                   revision,
                   memorySnapshot.epoch(),
                   currentMessage,
-                  currentMessage);
+                  currentMessage,
+                  AccountScope.id());
           List<ObjectNode> bounded = new ArrayList<>();
           List<String> messageIds = new ArrayList<>();
           int remaining = 24000;
@@ -401,8 +405,9 @@ class Model {
     if (!actualModel.matches("[A-Za-z0-9._:/-]{1,100}")) actualModel = c.modelName;
     s.db.update(
         "INSERT INTO"
-            + " model_calls(id,model,status,input_tokens,output_tokens,problem_id,operation,finish_reason,content_length,content_type,reasoning_length)"
-            + " VALUES (?::uuid,?,?,?,?,?::uuid,?,?,?,?,?)",
+            + " model_calls(account_id,id,model,status,input_tokens,output_tokens,problem_id,operation,finish_reason,content_length,content_type,reasoning_length)"
+            + " VALUES (?::uuid,?::uuid,?,?,?,?,?::uuid,?,?,?,?,?)",
+        AccountScope.id(),
         Json.id(),
         actualModel,
         status,

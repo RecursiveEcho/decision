@@ -38,7 +38,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
       "app.worker-enabled=false"
     })
 @AutoConfigureMockMvc
-class AttachmentsTest {
+class AttachmentsTest extends AdminFixture {
   @Autowired MockMvc mvc;
   @Autowired Store s;
   @Autowired Auth auth;

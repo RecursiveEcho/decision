@@ -29,7 +29,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
       "app.worker-enabled=false"
     })
 @AutoConfigureMockMvc
-class BackendTest {
+class BackendTest extends AdminFixture {
   @Autowired MockMvc mvc;
   @Autowired Store s;
   @Autowired Auth auth;
@@ -116,7 +116,10 @@ class BackendTest {
                   new String(
                       exchange.getRequestBody().readAllBytes(),
                       java.nio.charset.StandardCharsets.UTF_8));
-          ObjectNode response = answer.apply(request);
+          ObjectNode response;
+          try (var owner = AccountScope.enter(AccountScope.ADMIN)) {
+            response = answer.apply(request);
+          }
           byte[] out =
               Json.obj(
                       "model",

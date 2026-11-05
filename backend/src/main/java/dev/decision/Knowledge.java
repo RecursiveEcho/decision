@@ -48,19 +48,21 @@ class Knowledge {
           ignored -> {
             String latestUser =
                 s.db.queryForObject(
-                    "SELECT id::text FROM records WHERE kind='message' AND NOT deleted AND"
-                        + " problem_id=?::uuid AND data->>'role'='user' ORDER BY chat_source_seq"
-                        + " DESC LIMIT 1",
+                    "SELECT id::text FROM records WHERE account_id=?::uuid AND kind='message' AND"
+                        + " NOT deleted AND problem_id=?::uuid AND data->>'role'='user' ORDER BY"
+                        + " chat_source_seq DESC LIMIT 1",
                     String.class,
+                    AccountScope.id(),
                     problemId);
             if (!userMessageId.equals(latestUser)) return;
             ObjectNode job = request(problemId, true);
             if (job == null) return;
             s.db.update(
                 "UPDATE records SET data=jsonb_set(data,'{knowledgeSuggestion}',?::jsonb) WHERE"
-                    + " id=?::uuid",
+                    + " id=?::uuid AND account_id=?::uuid",
                 Json.obj("jobId", job.path("id")).toString(),
-                assistantMessageId);
+                assistantMessageId,
+                AccountScope.id());
           });
     } catch (RuntimeException ex) {
       // A full queue or failed optional write must not roll back the completed answer.
@@ -76,10 +78,11 @@ class Knowledge {
       throw new ApiError(400, "NO_KNOWLEDGE_INPUT", "当前没有可整理的有效文字；请先在对话里讨论要保留的内容");
     List<String> candidates =
         s.db.queryForList(
-            "SELECT id::text FROM jobs WHERE input->>'operation'='knowledge_proposal'"
-                + " AND input->>'fingerprint'=? AND state IN ('queued','running','succeeded')"
-                + " ORDER BY created_at DESC,id DESC",
+            "SELECT id::text FROM jobs WHERE account_id=?::uuid AND"
+                + " input->>'operation'='knowledge_proposal' AND input->>'fingerprint'=? AND state"
+                + " IN ('queued','running','succeeded') ORDER BY created_at DESC,id DESC",
             String.class,
+            AccountScope.id(),
             snapshot.fingerprint);
     for (String id : candidates) {
       ObjectNode job = s.get("job", id);
@@ -124,7 +127,9 @@ class Knowledge {
           job.putNull("error");
           s.save("job", job);
           s.db.update(
-              "UPDATE jobs SET state='succeeded' WHERE id=?::uuid", job.path("id").asText());
+              "UPDATE jobs SET state='succeeded' WHERE id=?::uuid AND account_id=?::uuid",
+              job.path("id").asText(),
+              AccountScope.id());
           return null;
         });
   }
@@ -136,15 +141,16 @@ class Knowledge {
   private static Snapshot snapshot(Store s, Config c, String problemId) {
     String p = s.get("problem", problemId).path("id").asText();
     long revision = s.version();
-    long epoch = s.db.queryForObject("SELECT epoch FROM chat_memory_state WHERE id=1", Long.class);
+    long epoch = s.memoryEpoch();
     List<ObjectNode> allMessages = s.all("message", p);
     List<ObjectNode> eligibleMessages =
         s.db.query(
             // Linking the derived job must not make its own input snapshot stale.
-            "SELECT (data - 'knowledgeSuggestion')::text FROM records WHERE kind='message' AND NOT"
-                + " deleted AND problem_id=?::uuid AND context_revision=? AND memory_epoch=? ORDER"
-                + " BY created_at,id",
+            "SELECT (data - 'knowledgeSuggestion')::text FROM records WHERE account_id=?::uuid AND"
+                + " kind='message' AND NOT deleted AND problem_id=?::uuid AND context_revision=?"
+                + " AND memory_epoch=? ORDER BY created_at,id",
             (rs, i) -> (ObjectNode) Json.parse(rs.getString(1)),
+            AccountScope.id(),
             p,
             revision,
             epoch);
@@ -557,13 +563,14 @@ class Knowledge {
   }
 
   private static boolean currentMessageReferences(Store s, JsonNode refs) {
-    long epoch = s.db.queryForObject("SELECT epoch FROM chat_memory_state WHERE id=1", Long.class);
+    long epoch = s.memoryEpoch();
     for (JsonNode ref : refs)
       if (ref.path("kind").asText().equals("message")
           && s.db.queryForObject(
-                  "SELECT count(*) FROM records WHERE id=?::uuid AND NOT deleted"
-                      + " AND context_revision=? AND memory_epoch=?",
+                  "SELECT count(*) FROM records WHERE account_id=?::uuid AND id=?::uuid AND NOT"
+                      + " deleted AND context_revision=? AND memory_epoch=?",
                   Integer.class,
+                  AccountScope.id(),
                   ref.path("id").asText(),
                   s.version(),
                   epoch)
@@ -576,9 +583,11 @@ class Knowledge {
     ArrayNode versions = Json.arr();
     s.db
         .queryForList(
-            "SELECT data::text FROM record_history WHERE kind='knowledge_entry'"
-                + " AND record_id=?::uuid ORDER BY (data->>'revision')::int DESC,seq DESC",
+            "SELECT h.data::text FROM record_history h JOIN records r ON r.id=h.record_id WHERE"
+                + " r.account_id=?::uuid AND h.kind='knowledge_entry' AND h.record_id=?::uuid ORDER"
+                + " BY (h.data->>'revision')::int DESC,h.seq DESC",
             String.class,
+            AccountScope.id(),
             id)
         .forEach(raw -> versions.add(Json.parse(raw)));
     return Json.obj("items", versions, "nextCursor", null);

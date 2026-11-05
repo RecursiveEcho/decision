@@ -523,6 +523,7 @@ class Domain {
   }
 
   ObjectNode device(JsonNode b) {
+    AccountScope.requireAdmin();
     ObjectNode d =
         s.create(
             "device",
@@ -548,12 +549,14 @@ class Domain {
   }
 
   ObjectNode control(String id, JsonNode b) {
+    AccountScope.requireAdmin();
     ObjectNode d = s.get("device", id);
     d.put("desiredState", Json.choice(b, "desiredState", "paused", "running"));
     return s.save("device", d);
   }
 
   void deviceOnly(String subject, String id) {
+    AccountScope.requireAdmin();
     if (!subject.equals("device:" + id))
       throw new ApiError(403, "DEVICE_TOKEN_REQUIRED", "需要本设备凭据");
   }
@@ -704,7 +707,7 @@ class Domain {
 
   ObjectNode job(String id, String subject) {
     ObjectNode j = s.get("job", id);
-    if (!subject.equals("owner")) {
+    if (subject.startsWith("device:")) {
       List<String> ids =
           s.db.queryForList(
               "SELECT input->>'deviceId' FROM jobs WHERE id=?::uuid", String.class, id);
@@ -722,6 +725,7 @@ class Domain {
   }
 
   ObjectNode sync(String id) {
+    AccountScope.requireAdmin();
     ObjectNode t = s.get("topic", id);
     if (!c.wikiConfigured()) throw new ApiError(503, "WIKI_NOT_CONFIGURED", "Wiki 尚未配置");
     t.put("syncStatus", "pending");
@@ -730,6 +734,7 @@ class Domain {
   }
 
   List<ObjectNode> list(String kind, String p) {
+    if (kind.equals("device")) AccountScope.requireAdmin();
     if (p != null) s.get("problem", p);
     List<ObjectNode> items = kind.equals("memory") ? chatMemory.list(p) : s.all(kind, p);
     if (kind.equals("device"))
@@ -742,6 +747,7 @@ class Domain {
 
   ObjectNode page(List<ObjectNode> items, String order, String cursor, int limit, String scope) {
     if (limit < 1 || limit > 100) throw new ApiError(400, "INVALID_LIMIT", "limit 范围为1至100");
+    if (!AccountScope.admin()) scope = AccountScope.id() + ":" + scope;
     boolean asc = order.equals("createdAt");
     Comparator<ObjectNode> cmp =
         Comparator.comparing((ObjectNode n) -> sortValue(n, order)).thenComparing(n -> entityId(n));
@@ -804,11 +810,16 @@ class Domain {
   ObjectNode status() {
     List<String> last =
         s.db.queryForList(
-            "SELECT status FROM model_calls ORDER BY created_at DESC LIMIT 1", String.class);
+            "SELECT status FROM model_calls WHERE account_id=?::uuid ORDER BY created_at DESC LIMIT"
+                + " 1",
+            String.class,
+            AccountScope.id());
     Map<String, Object> usage =
         s.db.queryForMap(
             "SELECT count(*) AS requests,coalesce(sum(input_tokens),0) AS"
-                + " inputs,coalesce(sum(output_tokens),0) AS outputs FROM model_calls");
+                + " inputs,coalesce(sum(output_tokens),0) AS outputs FROM model_calls WHERE"
+                + " account_id=?::uuid",
+            AccountScope.id());
     String seen = null;
     for (ObjectNode d : s.all("device", null))
       if (d.hasNonNull("lastHeartbeatAt")
@@ -825,7 +836,11 @@ class Domain {
             "lastCallStatus",
             last.isEmpty() ? "never" : last.get(0)),
         "wiki",
-        Json.obj("configured", c.wikiConfigured(), "status", wikiStatus),
+        Json.obj(
+            "configured",
+            c.wikiConfigured(),
+            "status",
+            AccountScope.admin() ? wikiStatus : "disabled"),
         "observer",
         Json.obj("lastSeenAt", seen),
         "usage",

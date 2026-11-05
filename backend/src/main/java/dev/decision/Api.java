@@ -18,17 +18,26 @@ class Api {
   final Domain d;
   final Store s;
   final Auth auth;
+  final Accounts accounts;
   final Config c;
   final MemoryOverview overview;
   final Knowledge knowledge;
 
-  Api(Domain d, Store s, Auth a, Config c, MemoryOverview overview, Knowledge knowledge) {
+  Api(
+      Domain d,
+      Store s,
+      Auth a,
+      Config c,
+      MemoryOverview overview,
+      Knowledge knowledge,
+      Accounts accounts) {
     this.d = d;
     this.s = s;
     auth = a;
     this.c = c;
     this.overview = overview;
     this.knowledge = knowledge;
+    this.accounts = accounts;
   }
 
   String who(HttpServletRequest r) {
@@ -47,8 +56,9 @@ class Api {
         () -> {
           List<Map<String, Object>> previous =
               s.db.queryForList(
-                  "SELECT request_hash,status,response FROM idempotency_keys WHERE scope=? AND"
-                      + " key=?::uuid",
+                  "SELECT request_hash,status,response FROM idempotency_keys WHERE"
+                      + " account_id=?::uuid AND scope=? AND key=?::uuid",
+                  AccountScope.id(),
                   scope,
                   key);
           if (!previous.isEmpty()) {
@@ -76,8 +86,9 @@ class Api {
           }
           ObjectNode result = action.get();
           s.db.update(
-              "INSERT INTO idempotency_keys(scope,key,request_hash,status,response) VALUES"
-                  + " (?,?::uuid,?,?,?)",
+              "INSERT INTO idempotency_keys(account_id,scope,key,request_hash,status,response)"
+                  + " VALUES (?::uuid,?,?::uuid,?,?,?)",
+              AccountScope.id(),
               scope,
               key,
               hash,
@@ -93,22 +104,19 @@ class Api {
   }
 
   @PostMapping("/auth/login")
-  ResponseEntity<?> login(@RequestBody JsonNode b, HttpServletRequest r) {
-    auth.checkLoginRate(r.getRemoteAddr());
-    String code = Json.required(b, "accessCode", 500);
-    if (!auth.codeMatches(code)) {
-      auth.failedLogin(r.getRemoteAddr());
-      throw new ApiError(401, "UNAUTHORIZED", "访问码不正确");
-    }
-    return post(
-        r,
-        b,
-        200,
-        () -> {
-          Instant expiry = Instant.now().plus(Duration.ofHours(24));
-          return Json.obj(
-              "accessToken", auth.token("owner", expiry), "expiresAt", expiry.toString());
-        });
+  ObjectNode login(@RequestBody JsonNode b, HttpServletRequest r) {
+    return accounts.login(b, r.getHeader("Idempotency-Key"), r.getRemoteAddr());
+  }
+
+  @PostMapping("/auth/register")
+  ResponseEntity<?> register(@RequestBody JsonNode b, HttpServletRequest r) {
+    return ResponseEntity.status(201)
+        .body(accounts.register(b, r.getHeader("Idempotency-Key"), r.getRemoteAddr()));
+  }
+
+  @GetMapping("/auth/me")
+  ObjectNode me() {
+    return accounts.current();
   }
 
   @GetMapping("/status")
@@ -231,11 +239,7 @@ class Api {
   ResponseEntity<?> deleteSource(@PathVariable String id) {
     s.write(
         () -> {
-          try {
-            d.deleteSource(id);
-          } catch (ApiError e) {
-            if (e.status != 404) throw e;
-          }
+          if (!s.deletedHere("source", id)) d.deleteSource(id);
           return null;
         });
     return ResponseEntity.noContent().build();
@@ -270,11 +274,7 @@ class Api {
   ResponseEntity<?> deleteMemory(@PathVariable String id) {
     s.write(
         () -> {
-          try {
-            d.deleteMemory(id);
-          } catch (ApiError e) {
-            if (e.status != 404) throw e;
-          }
+          if (!s.deletedHere("memory", id)) d.deleteMemory(id);
           return null;
         });
     return ResponseEntity.noContent().build();
@@ -282,6 +282,7 @@ class Api {
 
   @PostMapping("/topics/{id}/sync")
   ResponseEntity<?> sync(@PathVariable String id, @RequestBody JsonNode b, HttpServletRequest r) {
+    AccountScope.requireAdmin();
     return post(r, b, 202, () -> d.sync(id));
   }
 
@@ -374,22 +375,26 @@ class Api {
 
   @PostMapping("/devices")
   ResponseEntity<?> devices(@RequestBody JsonNode b, HttpServletRequest r) {
+    AccountScope.requireAdmin();
     return post(r, b, 201, () -> d.device(b));
   }
 
   @PatchMapping("/devices/{id}")
   ObjectNode device(@PathVariable String id, @RequestBody JsonNode b) {
+    AccountScope.requireAdmin();
     return s.write(() -> d.control(id, b));
   }
 
   @PostMapping("/devices/{id}/heartbeat")
   ResponseEntity<?> heartbeat(
       @PathVariable String id, @RequestBody JsonNode b, HttpServletRequest r) {
+    AccountScope.requireAdmin();
     return post(r, b, 200, () -> d.heartbeat(id, b, who(r)));
   }
 
   @PostMapping("/observations/batch")
   ResponseEntity<?> observations(@RequestBody JsonNode b, HttpServletRequest r) {
+    AccountScope.requireAdmin();
     return post(r, b, 200, () -> d.observations(b, who(r)));
   }
 
@@ -399,11 +404,13 @@ class Api {
       HttpServletRequest r,
       @RequestParam(required = false) String cursor,
       @RequestParam(defaultValue = "30") int limit) {
+    AccountScope.requireAdmin();
     return d.page(d.deliveries(id, who(r)), "createdAt", cursor, limit, "deliveries:" + id);
   }
 
   @PostMapping("/deliveries/{id}/ack")
   ResponseEntity<?> ack(@PathVariable String id, @RequestBody JsonNode b, HttpServletRequest r) {
+    AccountScope.requireAdmin();
     return post(r, b, 200, () -> d.ack(id, b, who(r)));
   }
 
@@ -415,6 +422,7 @@ class Api {
       @RequestParam(required = false) String cursor,
       @RequestParam(defaultValue = "30") int limit) {
     String resource = r.getRequestURI().substring("/api/v1/".length());
+    if (resource.equals("devices")) AccountScope.requireAdmin();
     String kind =
         resource.equals("memories") ? "memory" : resource.substring(0, resource.length() - 1);
     List<ObjectNode> items = d.list(kind, resource.equals("devices") ? null : problemId);

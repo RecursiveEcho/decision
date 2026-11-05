@@ -77,8 +77,9 @@ class DecisionCapture {
     // Include soft-deleted decisions: retry must never resurrect a manually removed record.
     List<Map<String, Object>> previous =
         s.db.queryForList(
-            "SELECT data::text,deleted FROM records WHERE kind='decision' AND"
-                + " data->>'origin'='chat' AND data->>'userMessageId'=? LIMIT 1",
+            "SELECT data::text,deleted FROM records WHERE account_id=?::uuid AND kind='decision'"
+                + " AND data->>'origin'='chat' AND data->>'userMessageId'=? LIMIT 1",
+            AccountScope.id(),
             userMessageId);
     if (!previous.isEmpty()) {
       if ((Boolean) previous.get(0).get("deleted")) return null;
@@ -108,9 +109,10 @@ class DecisionCapture {
     // one.
     if (s.db.queryForObject(
             "SELECT count(*) FROM records d JOIN records m ON m.id::text=d.data->>'userMessageId'"
-                + " WHERE d.kind='decision' AND d.problem_id=?::uuid AND d.data->>'origin'='chat'"
-                + " AND m.chat_source_seq>?",
+                + " AND m.account_id=d.account_id WHERE d.account_id=?::uuid AND d.kind='decision'"
+                + " AND d.problem_id=?::uuid AND d.data->>'origin'='chat' AND m.chat_source_seq>?",
             Integer.class,
+            AccountScope.id(),
             problemId,
             sequence)
         > 0) return null;
@@ -178,12 +180,13 @@ class DecisionCapture {
     List<ObjectNode> all =
         s.db.query(
             "SELECT d.data::text FROM records d JOIN records m ON"
-                + " m.id::text=d.data->>'userMessageId' WHERE d.kind='decision' AND"
-                + " d.problem_id=?::uuid AND NOT d.deleted AND d.data->>'origin'='chat' AND"
-                + " d.data->>'status'='active' AND m.kind='message' AND NOT m.deleted AND"
-                + " m.problem_id=d.problem_id AND m.data->>'role'='user' ORDER BY m.chat_source_seq"
-                + " DESC LIMIT 10",
+                + " m.id::text=d.data->>'userMessageId' AND m.account_id=d.account_id WHERE"
+                + " d.account_id=?::uuid AND d.kind='decision' AND d.problem_id=?::uuid AND NOT"
+                + " d.deleted AND d.data->>'origin'='chat' AND d.data->>'status'='active' AND"
+                + " m.kind='message' AND NOT m.deleted AND m.problem_id=d.problem_id AND"
+                + " m.data->>'role'='user' ORDER BY m.chat_source_seq DESC LIMIT 10",
             (rs, i) -> (ObjectNode) Json.parse(rs.getString(1)),
+            AccountScope.id(),
             problemId);
     for (ObjectNode decision : all) {
       if (!decision.path("origin").asText().equals("chat")
@@ -261,7 +264,10 @@ class DecisionCapture {
 
   private long messageSequence(String id) {
     return s.db.queryForObject(
-        "SELECT chat_source_seq FROM records WHERE id=?::uuid", Long.class, id);
+        "SELECT chat_source_seq FROM records WHERE account_id=?::uuid AND id=?::uuid",
+        Long.class,
+        AccountScope.id(),
+        id);
   }
 
   private static boolean directCommitment(String content, String quote, String choice) {

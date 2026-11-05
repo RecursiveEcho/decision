@@ -33,7 +33,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
       "app.worker-enabled=false"
     })
 @AutoConfigureMockMvc
-class KnowledgeTest {
+class KnowledgeTest extends AdminFixture {
   @Autowired MockMvc mvc;
   @Autowired Store s;
   @Autowired Auth auth;
@@ -604,7 +604,9 @@ class KnowledgeTest {
         new Gateway(
             in -> {
               ObjectNode result = candidate(in, "create", "讨论结论");
-              message(p, "合成：新消息改变上下文。");
+              try (var owner = AccountScope.enter(AccountScope.ADMIN)) {
+                message(p, "合成：新消息改变上下文。");
+              }
               return result;
             })) {
       JsonNode job = postBody("/problems/" + p + "/knowledge-proposals", Json.obj(), 202);

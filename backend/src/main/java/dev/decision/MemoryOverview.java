@@ -96,7 +96,10 @@ class MemoryOverview {
               Json.obj("fingerprint", fingerprint, "items", items, "coverage", before.coverage()));
           job.putNull("error");
           s.save("job", job);
-          s.db.update("UPDATE jobs SET state='succeeded' WHERE id=?::uuid", id);
+          s.db.update(
+              "UPDATE jobs SET state='succeeded' WHERE id=?::uuid AND account_id=?::uuid",
+              id,
+              AccountScope.id());
           return null;
         });
   }
@@ -211,10 +214,12 @@ class MemoryOverview {
     }
     List<String> ids =
         s.db.queryForList(
-            "SELECT j.id::text FROM jobs j JOIN records r ON r.id=j.id WHERE r.kind='job' AND NOT"
+            "SELECT j.id::text FROM jobs j JOIN records r ON r.id=j.id AND"
+                + " r.account_id=j.account_id WHERE j.account_id=?::uuid AND r.kind='job' AND NOT"
                 + " r.deleted AND j.input->>'operation'=? AND j.input->>'scopeKey'=? AND"
                 + " j.input->>'fingerprint'=? ORDER BY r.chat_source_seq DESC LIMIT 1",
             String.class,
+            AccountScope.id(),
             OPERATION,
             scopeKey(problemId),
             snapshot.fingerprint());
