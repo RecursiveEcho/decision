@@ -231,6 +231,28 @@ class KnowledgeTest {
   }
 
   @Test
+  void confirmedKnowledgeKeepsSnapshotAndHistoryWhenOriginalChatIsDeleted() throws Exception {
+    String p = problem().path("id").asText();
+    message(p, "合成：写入涉及幂等判断。");
+    try (Gateway gateway = new Gateway(in -> candidate(in, "create", "写入涉及幂等判断。"))) {
+      String entry = accept(prepare(p), 200).path("entryId").asText();
+      JsonNode pending = prepare(p);
+      JsonNode before = request(get("/api/v1/knowledge-entries/" + entry), null, 200);
+      assertEquals(
+          204,
+          mvc.perform(delete("/api/v1/problems/" + p).header("Authorization", "Bearer " + owner))
+              .andReturn()
+              .getResponse()
+              .getStatus());
+      assertEquals(before, request(get("/api/v1/knowledge-entries/" + entry), null, 200));
+      request(get("/api/v1/knowledge-entries/" + entry + "/history"), null, 200);
+      assertTrue(
+          knowledge.export().path("references").get(0).path("title").asText().contains("不可用"));
+      accept(pending, 404);
+    }
+  }
+
+  @Test
   void preparingDoesNotWriteKnowledgeAndAcceptanceIsIdempotentAcrossKeysAndRestart()
       throws Exception {
     String p = problem().path("id").asText();

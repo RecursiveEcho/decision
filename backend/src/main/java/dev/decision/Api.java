@@ -55,8 +55,24 @@ class Api {
             Map<String, Object> p = previous.get(0);
             if (!hash.equals(p.get("request_hash")))
               throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "相同幂等键不能提交不同内容");
-            return ResponseEntity.status((Integer) p.get("status"))
-                .body(Json.parse(auth.decrypt((String) p.get("response"))));
+            JsonNode cached = Json.parse(auth.decrypt((String) p.get("response")));
+            // Keep the key reserved. A late retry must not create a replacement conversation
+            // or redisplay an old job and its messages after deletion.
+            String path = r.getRequestURI();
+            if (path.equals("/api/v1/conversations") || path.equals("/api/v1/problems")) {
+              ObjectNode problem =
+                  (ObjectNode) (cached.has("problem") ? cached.get("problem") : cached);
+              ObjectNode current = d.readProblem(problem.path("id").asText());
+              // A replay can predate status support or a manual rename/archive.
+              problem.set("status", current.get("status"));
+              problem.set("title", current.get("title"));
+            } else if (status == 202 && cached.hasNonNull("id")) {
+              // The remaining 202 responses with an id are bare Job representations.
+              s.get("job", cached.path("id").asText());
+            } else if (cached.hasNonNull("proposalId")) {
+              s.get("knowledge_proposal", cached.path("proposalId").asText());
+            }
+            return ResponseEntity.status((Integer) p.get("status")).body(cached);
           }
           ObjectNode result = action.get();
           s.db.update(
@@ -121,6 +137,29 @@ class Api {
             throw new ApiError(400, "INVALID_REQUEST", "重试请求体必须为{}对象");
           return d.retryChat(id);
         });
+  }
+
+  @GetMapping("/problems")
+  ObjectNode problems(
+      @RequestParam(required = false) String status,
+      @RequestParam(required = false) String cursor,
+      @RequestParam(defaultValue = "30") int limit) {
+    return d.problems(status == null ? "active" : status, cursor, limit);
+  }
+
+  @GetMapping("/problems/{id}")
+  ObjectNode problem(@PathVariable String id) {
+    return d.readProblem(id);
+  }
+
+  @DeleteMapping("/problems/{id}")
+  ResponseEntity<?> deleteProblem(@PathVariable String id) {
+    s.write(
+        () -> {
+          d.deleteProblem(id);
+          return null;
+        });
+    return ResponseEntity.noContent().build();
   }
 
   @PatchMapping("/problems/{id}")
@@ -355,15 +394,7 @@ class Api {
     return post(r, b, 200, () -> d.ack(id, b, who(r)));
   }
 
-  @GetMapping({
-    "/problems",
-    "/sources",
-    "/memories",
-    "/topics",
-    "/discussions",
-    "/decisions",
-    "/devices"
-  })
+  @GetMapping({"/sources", "/memories", "/topics", "/discussions", "/decisions", "/devices"})
   ObjectNode list(
       HttpServletRequest r,
       @RequestParam(required = false) String problemId,
@@ -373,8 +404,7 @@ class Api {
     String resource = r.getRequestURI().substring("/api/v1/".length());
     String kind =
         resource.equals("memories") ? "memory" : resource.substring(0, resource.length() - 1);
-    List<ObjectNode> items =
-        d.list(kind, resource.equals("problems") || resource.equals("devices") ? null : problemId);
+    List<ObjectNode> items = d.list(kind, resource.equals("devices") ? null : problemId);
     if (status != null) items.removeIf(n -> !n.path("status").asText().equals(status));
     String order =
         switch (kind) {

@@ -30,6 +30,8 @@ class Domain {
         "problem",
         null,
         Json.obj(
+            "status",
+            "active",
             "title",
             Json.required(b, "title", 300),
             "goal",
@@ -40,14 +42,55 @@ class Domain {
             Json.strings(b, "unknowns")));
   }
 
-  ObjectNode editProblem(String id, JsonNode b) {
+  ObjectNode readProblem(String id) {
     ObjectNode p = s.get("problem", id);
+    if (!p.has("status")) p.put("status", "active");
+    return p;
+  }
+
+  ObjectNode editProblem(String id, JsonNode b) {
+    ObjectNode p = readProblem(id);
+    Set<String> fields = Set.of("title", "goal", "constraints", "unknowns", "status");
+    if (!b.isObject()
+        || b.isEmpty()
+        || b.properties().stream().anyMatch(field -> !fields.contains(field.getKey())))
+      throw new ApiError(400, "INVALID_FIELD", "仅支持修改标题、目标、限制、未知或归档状态");
+    if (b.has("status")) p.put("status", Json.choice(b, "status", "active", "archived"));
     if (b.has("title")) s.db.update("UPDATE records SET auto_title=false WHERE id=?::uuid", id);
     for (String k : List.of("title", "goal"))
       if (b.has(k)) p.put(k, Json.required(b, k, k.equals("title") ? 300 : 4000));
     for (String k : List.of("constraints", "unknowns")) if (b.has(k)) p.set(k, Json.strings(b, k));
-    s.bump();
+    if (b.has("goal") || b.has("constraints") || b.has("unknowns")) s.bump();
     return s.save("problem", p);
+  }
+
+  ObjectNode problems(String status, String cursor, int limit) {
+    if (!Set.of("active", "archived").contains(status))
+      throw new ApiError(400, "INVALID_FIELD", "status 只支持 active 或 archived");
+    List<ObjectNode> items = s.all("problem", null);
+    items.removeIf(p -> !p.path("status").asText("active").equals(status));
+    items.forEach(p -> p.put("status", status));
+    // Keep existing active-list pagination tokens valid across the upgrade.
+    String scope = status.equals("active") ? "problems:null:null" : "problems:null:archived";
+    return page(items, "updatedAt", cursor, limit, scope);
+  }
+
+  void deleteProblem(String id) {
+    s.get("problem", id);
+    // Conversation visibility changes under the same write lock as worker commits.
+    // Keep independent library records, including their original provenance.
+    s.db.update(
+        "UPDATE records SET deleted=true,updated_at=now() WHERE NOT deleted AND"
+            + " (id=?::uuid OR (problem_id=?::uuid AND (kind IN"
+            + " ('message','job','discussion','delivery') OR"
+            + " (kind='knowledge_proposal' AND data->>'status'<>'accepted'))))",
+        id,
+        id);
+    s.db.update(
+        "UPDATE jobs SET state='cancelled' WHERE problem_id=?::uuid"
+            + " AND state IN ('queued','running')",
+        id);
+    s.db.update("DELETE FROM analysis_pending WHERE problem_id=?::uuid", id);
   }
 
   String problemId(JsonNode b) {
@@ -112,7 +155,16 @@ class Domain {
             "problem",
             null,
             Json.obj(
-                "title", title, "goal", "", "constraints", Json.arr(), "unknowns", Json.arr()));
+                "status",
+                "active",
+                "title",
+                title,
+                "goal",
+                "",
+                "constraints",
+                Json.arr(),
+                "unknowns",
+                Json.arr()));
     String id = problem.path("id").asText();
     s.db.update("UPDATE records SET auto_title=true WHERE id=?::uuid", id);
     ObjectNode job = chat(id, b, true);
