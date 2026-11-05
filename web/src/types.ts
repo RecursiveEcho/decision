@@ -32,6 +32,7 @@ export interface Message {
     revision: number;
   }[];
   decisionRecord?: Decision;
+  knowledgeSuggestion?: { jobId: string };
 }
 export type Thinking = "off" | "low" | "high" | "max";
 export interface Attachment {
@@ -176,6 +177,7 @@ export interface KnowledgeCoverage {
   notice: string;
 }
 export interface KnowledgeProposal {
+  requiresRefresh?: boolean;
   id: string;
   problemId: string;
   status: "pending" | "accepted" | "dismissed";

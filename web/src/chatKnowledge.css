@@ -1,0 +1,171 @@
+.chat-knowledge-card {
+  margin: 20px 0 8px;
+  padding: 22px 24px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  min-width: 0;
+}
+.chat-knowledge-card > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--brand);
+  font-size: 12px;
+}
+.chat-knowledge-card > header small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+.chat-knowledge-card > h3 {
+  font-size: 18px;
+  line-height: 1.6;
+  margin: 16px 0 10px;
+  font-weight: 550;
+}
+.chat-knowledge-reason {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+  margin-bottom: 18px;
+}
+.chat-knowledge-card .markdown-body {
+  font-size: 14px;
+  line-height: 1.85;
+}
+.chat-knowledge-target {
+  font-size: 12px;
+  color: var(--brand);
+}
+.chat-knowledge-domains {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 20px 0 12px;
+}
+.chat-knowledge-domains span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.chat-knowledge-domains span + span::before {
+  content: "·";
+  margin-right: 8px;
+}
+.chat-knowledge-card > footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 20px;
+}
+.chat-knowledge-card > footer button {
+  padding: 7px 12px;
+  font-size: 12px;
+}
+.chat-knowledge-card .chat-knowledge-skip {
+  background: transparent;
+  color: var(--muted);
+  margin-left: auto;
+  padding-right: 0;
+}
+.chat-knowledge-card .chat-knowledge-skip:hover {
+  color: var(--ink);
+}
+.chat-knowledge-outdated {
+  font-size: 12px;
+  color: var(--muted);
+}
+.chat-knowledge-card.knowledge-complete {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  border-radius: 0;
+  padding: 10px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.knowledge-complete > button {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  padding: 3px;
+  color: var(--brand);
+  background: transparent;
+  font-size: 12px;
+}
+@media (max-width: 760px) {
+  .chat-knowledge-card {
+    padding: 18px;
+  }
+  .chat-knowledge-card > header {
+    flex-wrap: wrap;
+  }
+  .chat-knowledge-card > header small {
+    margin-left: 0;
+  }
+  .chat-knowledge-card .chat-knowledge-skip {
+    margin-left: 0;
+  }
+}
+.chat-knowledge {
+  margin: 18px 0;
+}
+.chat-knowledge-loading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.chat-knowledge-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+.chat-knowledge-reconnect,
+.chat-knowledge-expand {
+  background: transparent;
+  color: var(--brand);
+  padding: 5px 0;
+  font-size: 12px;
+}
+.chat-knowledge-reconnect:hover,
+.chat-knowledge-expand:hover {
+  background: transparent;
+  text-decoration: underline;
+}
+.chat-knowledge-body.preview-collapsed {
+  max-height: 200px;
+  overflow: hidden;
+  mask-image: linear-gradient(black 65%, transparent);
+}
+.chat-knowledge-recovery {
+  margin: 12px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.chat-knowledge-recovery > summary {
+  cursor: pointer;
+  font-size: 11px;
+}
+.chat-knowledge-recovery button {
+  font-size: 12px;
+  margin: 10px 0;
+}
+.chat-knowledge-recovery ul {
+  list-style: none;
+  padding: 0;
+}
+.chat-knowledge-recovery li {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+.chat-knowledge-recovery li small {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 11px;
+}

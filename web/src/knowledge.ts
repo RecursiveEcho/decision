@@ -18,6 +18,10 @@ export const knowledgeActions = {
 // using GET; an unknown POST result must reuse its original body and key on explicit reconnect.
 export function useKnowledge() {
   const proposals = ref<KnowledgeProposal[]>([]);
+  const suggestion = ref<KnowledgeProposal | null>(null);
+  const suggestionLoading = ref(false);
+  const suggestionError = ref("");
+  let suggestionSequence = 0;
   const entries = ref<KnowledgeEntry[]>([]);
   const loading = ref(false);
   const working = ref(false);
@@ -26,11 +30,16 @@ export function useKnowledge() {
   const uncertain = ref(false);
   const stale = ref(false);
   let generation = 0;
+  let readSequence = 0;
   let problemId = "";
   let owner = "";
   let operations = new Map<string, KnowledgeOperation>();
   function stop() {
     generation++;
+    suggestionSequence++;
+    suggestion.value = null;
+    suggestionLoading.value = false;
+    suggestionError.value = "";
     proposals.value = [];
     entries.value = [];
     loading.value = false;
@@ -63,15 +72,29 @@ export function useKnowledge() {
     return { active, save, clear, p };
   }
   async function read(current: ReturnType<typeof scope>) {
+    const sequence = ++readSequence;
     const [p, e] = await Promise.all([
       list<KnowledgeProposal>(
         `/knowledge-proposals?problemId=${encodeURIComponent(current.p)}`,
       ),
       list<KnowledgeEntry>("/knowledge-entries"),
     ]);
-    if (!current.active()) return;
+    if (!current.active() || sequence !== readSequence) return;
     proposals.value = p;
     entries.value = e;
+    if (suggestion.value) {
+      const previous = suggestion.value;
+      const updated = p.find((item) => item.id === previous.id);
+      if (
+        updated &&
+        (updated.status !== "pending" || previous.status === "pending")
+      ) {
+        suggestion.value = {
+          ...updated,
+          requiresRefresh: previous.requiresRefresh || updated.requiresRefresh,
+        };
+      }
+    }
   }
   function failure(value: unknown, current: ReturnType<typeof scope>) {
     if (!current.active()) return;
@@ -228,11 +251,85 @@ export function useKnowledge() {
       if (current.active()) loading.value = false;
     }
   }
+  async function followSuggestion(jobId: string) {
+    const sequence = ++suggestionSequence,
+      current = scope();
+    const active = () => current.active() && sequence === suggestionSequence;
+    suggestion.value = null;
+    suggestionError.value = "";
+    suggestionLoading.value = !!jobId;
+    if (!jobId || !active()) return;
+    const deadline = Date.now() + 360000;
+    try {
+      while (active()) {
+        const job = await request<Job & { problemId?: string }>(
+          `/jobs/${encodeURIComponent(jobId)}`,
+        );
+        if (!active()) return;
+        if (
+          (job.problemId && job.problemId !== current.p) ||
+          (job.kind && job.kind !== "knowledge_proposal")
+        )
+          return;
+        if (job.status === "failed") {
+          // A stale or failed draft never changes the successful chat response.
+          suggestionError.value =
+            "这次保存建议没有整理完成，可以继续聊或稍后重试。";
+          return;
+        }
+        if (job.status === "succeeded") {
+          const id = job.result?.proposalId;
+          if (!id) return;
+          const proposal = await request<KnowledgeProposal>(
+            `/knowledge-proposals/${encodeURIComponent(id)}`,
+          );
+          if (!active()) return;
+          if (proposal.problemId !== current.p || proposal.action === "skip")
+            return;
+          if (stale.value && !proposal.requiresRefresh) {
+            stale.value = false;
+            error.value = "";
+          }
+          suggestion.value = proposal;
+          return;
+        }
+        if (Date.now() >= deadline) {
+          suggestionError.value = "保存建议还在整理，可以稍后查看。";
+          return;
+        }
+        await sleep(1500);
+      }
+    } catch (value) {
+      if (active() && !(value instanceof ApiError && value.status === 499))
+        suggestionError.value = "保存建议暂时无法读取，可以稍后重新连接。";
+    } finally {
+      if (active()) suggestionLoading.value = false;
+    }
+  }
+  async function refresh() {
+    const current = scope();
+    if (!current.active() || working.value || loading.value) return;
+    loading.value = true;
+    try {
+      await read(current);
+    } catch (value) {
+      if (current.active())
+        error.value =
+          value instanceof Error ? value.message : "保存建议暂时无法读取。";
+    } finally {
+      if (current.active()) loading.value = false;
+    }
+  }
   async function run(
     kind: KnowledgeOperation["kind"],
     proposal?: KnowledgeProposal,
   ) {
     const current = scope();
+    if (kind === "accept" && proposal?.requiresRefresh) {
+      stale.value = true;
+      error.value = "这份建议已有变化，请根据最新讨论重新整理。";
+      return;
+    }
     if (
       !current.active() ||
       loading.value ||
@@ -264,6 +361,10 @@ export function useKnowledge() {
   }
   return {
     proposals,
+    suggestion,
+    suggestionLoading,
+    suggestionError,
+    followSuggestion,
     entries,
     loading,
     working,
@@ -273,6 +374,7 @@ export function useKnowledge() {
     stale,
     open,
     stop,
+    refresh,
     prepare: () => run("prepare"),
     accept: (p: KnowledgeProposal) => run("accept", p),
     dismiss: (p: KnowledgeProposal) => run("dismiss", p),

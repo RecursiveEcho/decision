@@ -221,12 +221,10 @@ it("stale version rejection retains preview and enables explicit fresh preparati
 it("job failure does not auto retry and the user can explicitly prepare again", async () => {
   const flow = useKnowledge();
   await flow.open("problem-a");
-  api.request
-    .mockResolvedValueOnce(job("queued"))
-    .mockResolvedValueOnce({
-      ...job("failed"),
-      error: { message: "合成失败" },
-    });
+  api.request.mockResolvedValueOnce(job("queued")).mockResolvedValueOnce({
+    ...job("failed"),
+    error: { message: "合成失败" },
+  });
   await flow.prepare();
   expect(flow.error.value).toBe("合成失败");
   expect(flow.uncertain.value).toBe(false);
@@ -274,4 +272,117 @@ it("storage failure blocks POST rather than losing the recovery identity", async
   await flow.prepare();
   expect(writes()).toHaveLength(0);
   expect(flow.error.value).toBe("合成存储不可用");
+});
+
+it("follows a persisted chat suggestion using only GET, then confirms the exact draft once", async () => {
+  const p = proposal();
+  savedProposals = [p];
+  const flow = useKnowledge();
+  await flow.open("problem-a");
+  api.request
+    .mockResolvedValueOnce({ ...job("queued"), kind: "knowledge_proposal" })
+    .mockResolvedValueOnce({ ...job("succeeded"), kind: "knowledge_proposal" })
+    .mockResolvedValueOnce(p);
+  const following = flow.followSuggestion("suggestion-job");
+  await vi.advanceTimersByTimeAsync(1500);
+  await following;
+  expect(flow.suggestion.value?.id).toBe(p.id);
+  expect(writes()).toHaveLength(0);
+  expect(api.request.mock.calls.map((call) => call[0])).toEqual([
+    "/jobs/suggestion-job",
+    "/jobs/suggestion-job",
+    "/knowledge-proposals/proposal-a",
+  ]);
+  api.request.mockImplementation(async () => {
+    savedProposals = [proposal({ status: "accepted", entryId: "entry-a" })];
+    return { status: "accepted" };
+  });
+  await flow.accept(p);
+  expect(writes()).toHaveLength(1);
+  expect(flow.suggestion.value?.status).toBe("accepted");
+});
+it("does not display skipped drafts, mismatched conversations, or failed suggestions", async () => {
+  const flow = useKnowledge();
+  await flow.open("problem-a");
+  for (const p of [
+    proposal({ action: "skip" }),
+    proposal({ problemId: "problem-b" }),
+  ]) {
+    api.request
+      .mockResolvedValueOnce(job("succeeded"))
+      .mockResolvedValueOnce(p);
+    await flow.followSuggestion("suggestion-job");
+    expect(flow.suggestion.value).toBeNull();
+  }
+  api.request.mockResolvedValueOnce(job("failed"));
+  await flow.followSuggestion("suggestion-job");
+  expect(flow.suggestion.value).toBeNull();
+  expect(flow.suggestionError.value).toContain("没有整理完成");
+  expect(writes()).toHaveLength(0);
+});
+it("a newer reply cancels an old suggestion's late result without clearing its own suggestion", async () => {
+  const flow = useKnowledge();
+  await flow.open("problem-a");
+  let finish!: (value: Job) => void;
+  api.request.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const old = flow.followSuggestion("old-job");
+  api.request
+    .mockResolvedValueOnce(job("succeeded"))
+    .mockResolvedValueOnce(proposal({ id: "new-proposal" }));
+  await flow.followSuggestion("new-job");
+  finish(job("succeeded"));
+  await old;
+  expect(flow.suggestion.value?.id).toBe("new-proposal");
+  await flow.followSuggestion("");
+  expect(flow.suggestion.value).toBeNull();
+  expect(writes()).toHaveLength(0);
+});
+it("conversation navigation, logout and a restarted controller cannot revive old suggestion reads", async () => {
+  const flow = useKnowledge();
+  await flow.open("problem-a");
+  let finish!: (value: KnowledgeProposal) => void;
+  api.request.mockResolvedValueOnce(job("succeeded")).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const old = flow.followSuggestion("old-job");
+  await vi.advanceTimersByTimeAsync(0);
+  flow.stop();
+  api.owner = "owner-b";
+  finish(proposal());
+  await old;
+  expect(flow.suggestion.value).toBeNull();
+  expect(writes()).toHaveLength(0);
+});
+it("preserves server requiresRefresh on an expired draft without preparing or accepting it", async () => {
+  const flow = useKnowledge();
+  await flow.open("problem-a");
+  api.request
+    .mockResolvedValueOnce(job("succeeded"))
+    .mockResolvedValueOnce(proposal({ requiresRefresh: true }));
+  await flow.followSuggestion("suggestion-job");
+  expect(flow.suggestion.value?.requiresRefresh).toBe(true);
+  expect(writes()).toHaveLength(0);
+});
+
+it("rejects a server-marked stale draft locally and allows a fresh chat-bound replacement", async () => {
+  const flow = useKnowledge();
+  await flow.open("problem-a");
+  await flow.accept(proposal({ requiresRefresh: true }));
+  expect(writes()).toHaveLength(0);
+  expect(flow.stale.value).toBe(true);
+  api.request
+    .mockResolvedValueOnce(job("succeeded"))
+    .mockResolvedValueOnce(proposal({ id: "fresh", requiresRefresh: false }));
+  await flow.followSuggestion("fresh-job");
+  expect(flow.stale.value).toBe(false);
+  expect(flow.error.value).toBe("");
+  expect(flow.suggestion.value?.id).toBe("fresh");
 });
