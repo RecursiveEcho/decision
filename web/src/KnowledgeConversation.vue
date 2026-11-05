@@ -1,15 +1,41 @@
 <script setup lang="ts">
-import { computed, onUnmounted, watch } from "vue";
-import { BookPlus, LoaderCircle } from "@lucide/vue";
+import { computed, onUnmounted, ref, watch } from "vue";
+import { LoaderCircle } from "@lucide/vue";
+import type { Message } from "./types";
 import { useKnowledge, knowledgeActions } from "./knowledge";
-import { renderMarkdown } from "./markdown";
-import KnowledgeReferences from "./KnowledgeReferences.vue";
-const props = defineProps<{ problemId: string; disabled: boolean }>();
-defineEmits<{ source: [id: string]; discuss: []; library: [] }>();
+import KnowledgeProposalCard from "./KnowledgeProposalCard.vue";
+import "./chatKnowledge.css";
+
+const props = defineProps<{
+  problemId: string;
+  disabled: boolean;
+  message: Message | undefined;
+}>();
+const emit = defineEmits<{
+  source: [id: string];
+  discuss: [];
+  library: [];
+  beforeReveal: [];
+}>();
 const flow = useKnowledge();
-const latest = computed(() => flow.proposals.value[0]);
-const target = computed(() =>
-  flow.entries.value.find((e) => e.id === latest.value?.targetEntryId),
+const suggestionJobId = computed(() =>
+  props.message?.role === "assistant"
+    ? props.message.knowledgeSuggestion?.jobId || ""
+    : "",
+);
+const manual = ref(false);
+const showingHistory = ref(false);
+const history = computed(() =>
+  flow.proposals.value.filter((item) => item.action !== "skip"),
+);
+const latest = computed(() =>
+  manual.value ? flow.proposals.value[0] : flow.suggestion.value,
+);
+watch(
+  () => latest.value?.id,
+  (id, old) => {
+    if (id && id !== old) emit("beforeReveal");
+  },
 );
 const unavailable = computed(
   () =>
@@ -18,215 +44,123 @@ const unavailable = computed(
     flow.working.value ||
     flow.uncertain.value,
 );
-const related = (id: string) =>
-  flow.entries.value.find((e) => e.id === id)?.title || "关联知识";
+let selection = 0;
 watch(
-  () => props.problemId,
-  (id) => {
-    void flow.open(id);
+  () => [props.problemId, props.message] as const,
+  async ([problemId], prior) => {
+    const request = ++selection;
+    manual.value = false;
+    showingHistory.value = false;
+    // Cancel the old draft immediately when discussion moves on.
+    void flow.followSuggestion("");
+    if (!prior || problemId !== prior[0]) await flow.open(props.problemId);
+    else await flow.refresh();
+    if (request !== selection) return;
+    void flow.followSuggestion(suggestionJobId.value);
   },
   { immediate: true },
 );
-onUnmounted(flow.stop);
+async function prepare() {
+  manual.value = true;
+  await flow.prepare();
+}
+function discuss() {
+  emit("discuss");
+}
+onUnmounted(() => {
+  selection++;
+  flow.stop();
+});
 </script>
-
 <template>
-  <section class="knowledge-conversation" aria-label="从对话整理知识">
-    <div class="knowledge-toolbar">
-      <button
-        type="button"
-        class="secondary knowledge-prepare"
-        :disabled="unavailable"
-        @click="flow.prepare()"
-      >
-        <LoaderCircle
-          v-if="flow.working.value"
-          :size="16"
-          class="spinning"
-        /><BookPlus v-else :size="16" />
-        {{
-          flow.working.value
-            ? "正在整理…"
-            : latest
-              ? "重新整理建议"
-              : "整理入库"
-        }}
-      </button>
-      <span class="muted">先审阅建议，确认后才保存。</span>
-    </div>
+  <section
+    v-if="
+      latest ||
+      flow.suggestionLoading.value ||
+      flow.suggestionError.value ||
+      flow.error.value ||
+      flow.uncertain.value ||
+      history.length
+    "
+    class="chat-knowledge"
+    aria-label="聊天保存建议"
+  >
     <p
-      v-if="flow.loading.value && !flow.working.value"
-      class="muted"
+      v-if="flow.suggestionLoading.value"
+      class="chat-knowledge-loading"
       role="status"
     >
-      正在读取整理记录…
-    </p>
-    <p v-if="flow.note.value" class="knowledge-note muted" role="status">
-      {{ flow.note.value }}
+      <LoaderCircle
+        :size="13"
+        class="spinning"
+      />正在把值得留下的内容整理成建议…
     </p>
     <p v-if="flow.error.value" class="error" role="alert">
       {{ flow.error.value }}
     </p>
+    <p
+      v-if="flow.suggestionError.value"
+      class="chat-knowledge-status"
+      role="status"
+    >
+      {{ flow.suggestionError.value }}
+    </p>
     <button
       v-if="flow.uncertain.value"
-      type="button"
       class="secondary"
-      :disabled="props.disabled || flow.working.value || flow.loading.value"
+      :disabled="disabled || flow.working.value || flow.loading.value"
       @click="flow.resume()"
     >
-      重新连接上次操作
+      重新连接上次保存操作
     </button>
     <button
-      v-else-if="flow.error.value && !latest && !flow.stale.value"
-      type="button"
-      class="secondary"
-      :disabled="unavailable"
-      @click="flow.open(problemId)"
+      v-if="flow.suggestionError.value && suggestionJobId"
+      class="chat-knowledge-reconnect"
+      :disabled="disabled || flow.suggestionLoading.value"
+      @click="flow.followSuggestion(suggestionJobId)"
     >
-      刷新整理记录
+      重新查看建议
     </button>
-    <article
-      v-if="latest"
-      class="knowledge-proposal"
-      :class="{ 'knowledge-proposal-complete': latest.status !== 'pending' }"
+    <KnowledgeProposalCard
+      v-if="latest && latest.action !== 'skip'"
+      :proposal="latest"
+      :entries="flow.entries.value"
+      :disabled="unavailable"
+      :stale="flow.stale.value"
+      @accept="flow.accept(latest)"
+      @dismiss="flow.dismiss(latest)"
+      @source="emit('source', $event)"
+      @discuss="discuss"
+      @library="emit('library')"
+    />
+    <details
+      v-if="
+        flow.stale.value ||
+        latest?.requiresRefresh ||
+        flow.suggestionError.value ||
+        history.length
+      "
+      :open="showingHistory"
+      @toggle="showingHistory = ($event.target as HTMLDetailsElement).open"
+      class="chat-knowledge-recovery"
     >
-      <div class="knowledge-proposal-heading">
-        <span class="knowledge-action">{{
-          knowledgeActions[latest.action]
-        }}</span>
-        <span class="muted">{{
-          latest.status === "pending"
-            ? "待你审阅"
-            : latest.status === "accepted"
-              ? "已确认入库"
-              : "已略过"
-        }}</span>
-      </div>
-      <h3>{{ latest.title || "这次整理建议" }}</h3>
-      <p>{{ latest.reason }}</p>
-      <template v-if="latest.status === 'pending'">
-        <div v-if="latest.domains.length" class="knowledge-tags">
-          <span v-for="domain in latest.domains" :key="domain">{{
-            domain
-          }}</span>
-        </div>
-        <details v-if="latest.targetEntryId" class="knowledge-comparison">
-          <summary>
-            对照已有知识：{{ target?.title || "目标条目" }} · 第
-            {{ latest.targetRevision }} 版
-          </summary>
-          <p v-if="!target" class="muted">
-            已有条目暂时无法读取，请重新整理后再确认。
-          </p>
-          <template v-else>
-            <p v-if="target.revision !== latest.targetRevision" class="error">
-              已有条目已更新为第 {{ target.revision }} 版，需要重新整理。
-            </p>
-            <div
-              class="markdown-body"
-              v-html="renderMarkdown(target.markdown)"
-            />
-          </template>
-        </details>
-        <div v-if="latest.markdown" class="knowledge-preview">
-          <small>拟保存的完整正文</small>
-          <div class="markdown-body" v-html="renderMarkdown(latest.markdown)" />
-        </div>
-        <p v-if="latest.relatedEntryIds.length" class="muted">
-          关联：{{ latest.relatedEntryIds.map(related).join("、") }}
-        </p>
-        <KnowledgeReferences
-          :refs="latest.refs"
-          :disabled="props.disabled"
-          @source="$emit('source', $event)"
-        />
-        <details class="knowledge-coverage">
-          <summary>
-            {{
-              latest.coverage.truncated
-                ? "本次仅整理了部分内容"
-                : "本次整理范围"
-            }}
-          </summary>
-          <p class="muted">
-            对话 {{ latest.coverage.messagesConsidered }}/{{
-              latest.coverage.messagesTotal
-            }}
-            条 · 来源 {{ latest.coverage.sourcesConsidered }}/{{
-              latest.coverage.sourcesTotal
-            }}
-            份 · 对照已确认知识 {{ latest.coverage.knowledgeConsidered }}/{{
-              latest.coverage.knowledgeTotal
-            }}
-            条。
-          </p>
-          <p class="muted">
-            {{
-              latest.coverage.notice ||
-              "仅使用对话文字与正式来源，未直接读取附件原件；对照范围有限，不代表完整冲突检测。"
-            }}
-          </p>
-        </details>
-        <div class="knowledge-buttons">
-          <button
-            v-if="latest.action !== 'skip'"
-            type="button"
-            :disabled="
-              unavailable ||
-              flow.stale.value ||
-              (!!target && target.revision !== latest.targetRevision)
-            "
-            @click="flow.accept(latest)"
-          >
-            确认{{ knowledgeActions[latest.action] }}入库
-          </button>
-          <button
-            type="button"
-            class="secondary"
-            :disabled="unavailable"
-            @click="$emit('discuss')"
-          >
-            继续聊一聊
-          </button>
-          <button
-            type="button"
-            class="secondary"
-            :disabled="unavailable"
-            @click="flow.dismiss(latest)"
-          >
-            {{ latest.action === "skip" ? "知道了，暂不保存" : "这次不保存" }}
-          </button>
-        </div>
-      </template>
-      <button
-        v-else-if="latest.status === 'accepted'"
-        type="button"
-        class="secondary"
-        :disabled="props.disabled"
-        @click="$emit('library')"
-      >
-        查看已确认知识
+      <summary>保存建议与记录</summary>
+      <p v-if="flow.stale.value" class="muted">可以根据现在的讨论重新整理。</p>
+      <button class="secondary" :disabled="unavailable" @click="prepare">
+        {{ flow.working.value ? "正在整理…" : "重新整理建议" }}
       </button>
-    </article>
-    <details v-if="flow.proposals.value.length > 1" class="knowledge-previous">
-      <summary>之前的整理 · {{ flow.proposals.value.length - 1 }}</summary>
-      <div
-        v-for="proposal in flow.proposals.value.slice(1)"
-        :key="proposal.id"
-        class="knowledge-previous-item"
-      >
-        <span
-          >{{ knowledgeActions[proposal.action] }} ·
-          {{ proposal.title || "整理建议" }}</span
-        >
-        <small>{{
-          proposal.status === "accepted"
-            ? "已入库"
-            : proposal.status === "dismissed"
-              ? "已略过"
-              : "旧建议，请以最新讨论重新整理"
-        }}</small>
-      </div>
+      <ul v-if="history.length">
+        <li v-for="proposal in history" :key="proposal.id">
+          <span>{{ proposal.title || "整理建议" }}</span
+          ><small>{{
+            proposal.status === "accepted"
+              ? "已保存"
+              : proposal.status === "dismissed"
+                ? "已略过"
+                : knowledgeActions[proposal.action] + "建议"
+          }}</small>
+        </li>
+      </ul>
     </details>
   </section>
 </template>

@@ -327,6 +327,15 @@ async function editOriginal() {
   await nextTick();
   composerInput.value?.focus();
 }
+async function revealKnowledgeSuggestion() {
+  const pane = mainPane.value;
+  const interaction = scrollInteraction;
+  const follow =
+    pane && pane.scrollHeight - pane.scrollTop - pane.clientHeight < 220;
+  await nextTick();
+  if (follow && mainPane.value && interaction === scrollInteraction)
+    mainPane.value.scrollTop = mainPane.value.scrollHeight;
+}
 async function continueKnowledgeDiscussion() {
   await nextTick();
   composerInput.value?.focus({ preventScroll: true });
@@ -950,9 +959,11 @@ onUnmounted(() => {
           <KnowledgeConversation
             v-if="!newProblem && problem && messages.length"
             :problem-id="problem.id"
+            :message="messages.at(-1)"
             :disabled="busy || !!pendingChat || chat.preparing.value"
             @source="showSource"
             @discuss="continueKnowledgeDiscussion"
+            @before-reveal="revealKnowledgeSuggestion"
             @library="tab = '资料与主题'"
           />
           <div class="composer-dock">
