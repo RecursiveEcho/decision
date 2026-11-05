@@ -1,6 +1,13 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
-import { Archive, ArrowLeft, Ellipsis } from "@lucide/vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowLeft,
+  Ellipsis,
+  Pencil,
+  Trash2,
+} from "@lucide/vue";
 import { sessionId } from "./api";
 import type { ConversationChange, Problem } from "./types";
 
@@ -39,12 +46,29 @@ function trigger(id: string) {
 }
 function toggleMenu(id: string) {
   menu.value = menu.value === id ? "" : id;
-  if (menu.value)
-    void nextTick(() =>
-      root.value
-        ?.querySelector<HTMLButtonElement>(".row-actions button")
-        ?.focus(),
-    );
+}
+watch(menu, async (id, old) => {
+  document.getElementById("menu-" + old)?.hidePopover();
+  if (!id) return;
+  await nextTick();
+  const anchor = trigger(id)?.getBoundingClientRect();
+  const popup = document.getElementById("menu-" + id);
+  if (!anchor || !popup) return;
+  popup.showPopover();
+  const height = popup.getBoundingClientRect().height;
+  popup.style.left =
+    Math.max(8, Math.min(anchor.right - 216, window.innerWidth - 224)) + "px";
+  popup.style.top =
+    Math.max(
+      8,
+      anchor.bottom + height + 8 <= window.innerHeight
+        ? anchor.bottom + 6
+        : anchor.top - height - 6,
+    ) + "px";
+  popup.querySelector<HTMLButtonElement>("button")?.focus();
+});
+function closeOnResize() {
+  menu.value = "";
 }
 function closeOutside(event: Event) {
   if (
@@ -62,8 +86,9 @@ function onKey(event: KeyboardEvent) {
     menu.value = "";
   } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
     const items = Array.from(
-      root.value?.querySelectorAll<HTMLButtonElement>(".row-actions button") ||
-        [],
+      document
+        .getElementById("menu-" + menu.value)
+        ?.querySelectorAll<HTMLButtonElement>("button") || [],
     );
     if (!items.length) return;
     event.preventDefault();
@@ -109,10 +134,12 @@ function move(item: Problem) {
   emit("change", item.id, { status: archived.value ? "active" : "archived" });
 }
 onMounted(() => {
+  window.addEventListener("resize", closeOnResize);
   document.addEventListener("pointerdown", closeOutside);
   document.addEventListener("focusin", closeOutside);
 });
 onUnmounted(() => {
+  window.removeEventListener("resize", closeOnResize);
   document.removeEventListener("pointerdown", closeOutside);
   document.removeEventListener("focusin", closeOutside);
 });
@@ -123,6 +150,7 @@ onUnmounted(() => {
     class="history-section"
     aria-label="历史对话"
     @keydown="onKey"
+    @scroll="menu = ''"
   >
     <div class="history-heading">
       <h2>{{ archived ? "已归档对话" : "最近对话" }}</h2>
@@ -162,29 +190,34 @@ onUnmounted(() => {
           class="history-more"
           :aria-label="item.title + '的操作'"
           :aria-expanded="menu === item.id"
+          aria-haspopup="true"
+          :aria-controls="'menu-' + item.id"
           :disabled="disabled"
           @click="toggleMenu(item.id)"
         >
           <Ellipsis :size="17" />
         </button>
         <div
-          v-if="menu === item.id"
+          :id="'menu-' + item.id"
+          popover="manual"
           class="row-actions"
           role="group"
           :aria-label="item.title + '的操作'"
         >
           <button :disabled="disabled" @click="edit(item, 'rename')">
-            改名
+            <Pencil :size="17" />重命名
           </button>
           <button :disabled="disabled" @click="move(item)">
-            {{ archived ? "恢复" : "归档" }}
+            <component :is="archived ? ArchiveRestore : Archive" :size="17" />{{
+              archived ? "恢复" : "归档"
+            }}
           </button>
           <button
             class="destructive"
             :disabled="disabled"
             @click="edit(item, 'delete')"
           >
-            删除
+            <Trash2 :size="17" />删除
           </button>
         </div>
       </li>

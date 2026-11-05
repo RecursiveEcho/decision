@@ -10,7 +10,9 @@ import {
   Brain,
   LogOut,
   X,
+  Settings,
 } from "@lucide/vue";
+import AppearanceSettings from "./AppearanceSettings.vue";
 import ConversationHistory from "./ConversationHistory.vue";
 import type { ConversationChange, Problem } from "./types";
 
@@ -37,6 +39,7 @@ const tools = [
   { title: "资料与主题", icon: Library },
   { title: "记忆", icon: Brain },
 ];
+const settings = ref<InstanceType<typeof AppearanceSettings>>();
 const isMobile = ref(false);
 const mobileOpen = ref(false);
 const sidebar = ref<HTMLElement | null>(null);
@@ -66,7 +69,7 @@ function navigate(action: () => void) {
   action();
 }
 function keydown(event: KeyboardEvent) {
-  if (!mobileOpen.value || sidebar.value?.querySelector("dialog[open]")) return;
+  if (!mobileOpen.value || document.querySelector("dialog[open]")) return;
   if (event.key === "Escape") {
     event.preventDefault();
     closeMenu();
@@ -219,7 +222,14 @@ defineExpose({ openMenu });
         </span>
       </nav>
       <div class="sidebar-account">
-        <span class="space-label">个人空间</span>
+        <button
+          class="account-settings"
+          aria-label="设置"
+          title="设置"
+          @click="settings?.open($event.currentTarget as HTMLElement)"
+        >
+          <Settings :size="18" /><span class="sidebar-label">设置</span>
+        </button>
         <button
           class="icon-button"
           title="退出登录"
@@ -231,4 +241,5 @@ defineExpose({ openMenu });
       </div>
     </div>
   </aside>
+  <AppearanceSettings ref="settings" />
 </template>
