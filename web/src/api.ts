@@ -1,4 +1,4 @@
-import type { Job } from "./types";
+import type { Job, AuthSession } from "./types";
 import { clearChatSession } from "./chatStorage";
 import { clearMediaSession, purgeExpiredMedia } from "./mediaStorage";
 import { OVERVIEW_STORAGE } from "./overviewStorage";
@@ -26,14 +26,28 @@ export function token(): string {
     return "";
   }
 }
-export function setSession(s: { accessToken: string; expiresAt: string }) {
-  sessionStorage.removeItem(OVERVIEW_STORAGE);
-  sessionStorage.removeItem(KNOWLEDGE_STORAGE);
-  clearLocalMedia();
-  clearChatSession();
+export function setSession(
+  s: Pick<AuthSession, "accessToken" | "expiresAt"> &
+    Partial<Pick<AuthSession, "account">>,
+) {
+  // Abort old responses/retries and clear mounted account state before installing new credentials.
+  logout();
   sessionStorage.setItem(
     SESSION,
-    JSON.stringify({ ...s, localId: crypto.randomUUID() }),
+    JSON.stringify({
+      accessToken: s.accessToken,
+      expiresAt: s.expiresAt,
+      ...(s.account
+        ? {
+            account: {
+              id: s.account.id,
+              username: s.account.username,
+              role: s.account.role,
+            },
+          }
+        : {}),
+      localId: crypto.randomUUID(),
+    }),
   );
   void purgeExpiredMedia().catch(() => {});
 }
@@ -118,9 +132,12 @@ export async function request<T>(
       );
     }
     checkSession();
-    if (response.status === 401) {
+    if (
+      response.status === 401 &&
+      !["/auth/login", "/auth/register"].includes(path)
+    ) {
       logout();
-      throw new ApiError("访问码无效或登录已过期，请重新登录。", 401);
+      throw new ApiError("登录已过期，请重新登录。", 401);
     }
     if (!response.ok) {
       const data = await response.json().catch(() => null);

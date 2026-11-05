@@ -10,6 +10,7 @@ import {
   token,
   waitJob,
 } from "./api";
+import AuthScreen from "./AuthScreen.vue";
 import AppSidebar from "./AppSidebar.vue";
 import EvidencePanel from "./EvidencePanel.vue";
 import AttachmentList from "./AttachmentList.vue";
@@ -35,6 +36,8 @@ import { FILE_ACCEPT } from "./attachments";
 import { renderMarkdown } from "./markdown";
 import { useChatFlow } from "./chatFlow";
 import type {
+  Account,
+  AuthSession,
   Evidence,
   Decision,
   ConversationChange,
@@ -47,16 +50,18 @@ import type {
   Thinking,
 } from "./types";
 const logged = ref(!!token()),
-  accessCode = ref(""),
   busy = ref(false),
   error = ref(""),
   note = ref(""),
   mock = ref(false);
+const account = ref<Account | null>(null);
+const sessionKey = ref(logged.value ? sessionId() : "");
 const sidebar = ref<InstanceType<typeof AppSidebar> | null>(null);
 const libraryPage = ref<InstanceType<typeof LibraryPage> | null>(null);
 const sidebarCollapsed = ref(false);
 const sidebarModal = ref(false);
 const composing = ref(false);
+const restoringChat = ref(false);
 const mainPane = ref<HTMLElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const thinkingMenu = ref<HTMLElement | null>(null);
@@ -386,14 +391,17 @@ const labels: Record<string, string> = {
   error: "异常",
 };
 const label = (value: string) => labels[value] || value;
+let actionSequence = 0;
 async function act(fn: () => Promise<void>) {
   if (busy.value) return;
+  const action = ++actionSequence;
   busy.value = true;
   error.value = "";
   note.value = "";
   try {
     await fn();
   } catch (e) {
+    if (action !== actionSequence) return;
     note.value = "";
     if (!(e instanceof ApiError && e.status === 499))
       error.value = e instanceof Error ? e.message : "操作失败";
@@ -402,11 +410,23 @@ async function act(fn: () => Promise<void>) {
       errorBanner.value?.scrollIntoView({ block: "nearest", behavior: "auto" });
     }
   } finally {
-    busy.value = false;
+    if (action === actionSequence) busy.value = false;
   }
 }
 function ended() {
   generation++;
+  actionSequence++;
+  busy.value = false;
+  account.value = null;
+  sessionKey.value = "";
+  tab.value = "讨论";
+  error.value = "";
+  note.value = "";
+  sourceTitle.value = "";
+  sourceQuotes.value = [];
+  thinkingOpen.value = false;
+  draggingFiles.value = false;
+  restoringChat.value = false;
   memoryOverview.stop();
   logged.value = false;
   problems.value = [];
@@ -540,20 +560,14 @@ async function load() {
     if (g === generation) mock.value = m.some((x) => x.mode === "mock");
   }
 }
-async function login() {
-  await act(async () => {
-    const s = await request<{ accessToken: string; expiresAt: string }>(
-      "/auth/login",
-      "POST",
-      { accessCode: accessCode.value },
-    );
-    setSession(s);
-    accessCode.value = "";
-    logged.value = true;
-    await initialize();
-  });
+async function enterAccount(session: AuthSession) {
+  setSession(session);
+  sessionKey.value = sessionId();
+  logged.value = true;
+  await act(initialize);
 }
 async function initialize() {
+  account.value = await request<Account>("/auth/me");
   chat.restore();
   tab.value = "讨论";
   const restoringKnowledgeId = [
@@ -582,8 +596,26 @@ async function initialize() {
     pendingChat.value?.job &&
     !pendingChat.value.operation &&
     pendingChat.value.state !== "stale"
-  )
-    await chat.resume();
+  ) {
+    // A restored model task must not keep the whole workspace busy until it finishes.
+    const restoringSession = sessionId();
+    restoringChat.value = true;
+    void chat
+      .resume()
+      .catch((failure) => {
+        if (
+          restoringSession === sessionId() &&
+          !(failure instanceof ApiError && failure.status === 499)
+        )
+          error.value =
+            failure instanceof Error
+              ? failure.message
+              : "回答尚未恢复，可以稍后重试。";
+      })
+      .finally(() => {
+        if (restoringSession === sessionId()) restoringChat.value = false;
+      });
+  }
 }
 async function job(path: string, body: unknown) {
   const id = selected.value;
@@ -734,28 +766,18 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div v-if="!logged" class="login">
-    <div class="brand">知衡 <span>DECISION / PERSONAL</span></div>
-    <h1>把问题想清楚，<br />再做自己的决定。</h1>
-    <p>整理依据，留住未知，回看每一次选择。</p>
-    <form @submit.prevent="login" class="card">
-      <h2>进入个人空间</h2>
-      <label
-        >访问码<input
-          v-model="accessCode"
-          type="password"
-          required
-          autocomplete="current-password"
-          autofocus /></label
-      ><button :disabled="busy">{{ busy ? "连接中…" : "登录" }}</button>
-      <p v-if="error" role="alert" class="error">{{ error }}</p>
-    </form>
-  </div>
-  <div v-else class="shell" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
+  <AuthScreen v-if="!logged" @authenticated="enterAccount" />
+  <div
+    v-else
+    :key="sessionKey"
+    class="shell"
+    :class="{ 'sidebar-collapsed': sidebarCollapsed }"
+  >
     <AppSidebar
       ref="sidebar"
       v-model:collapsed="sidebarCollapsed"
       :problems="problems"
+      :account-name="account?.username || ''"
       :selected="selected"
       :new-problem="newProblem"
       :active-tab="tab"
@@ -920,7 +942,8 @@ onUnmounted(() => {
             class="pending-recovery"
             role="status"
           >
-            <p v-if="pendingChat.mediaUnavailable">
+            <p v-if="restoringChat">回答仍在生成，你可以先查看资料或记忆。</p>
+            <p v-else-if="pendingChat.mediaUnavailable">
               本机附件暂存已丢失，无法继续这次发送。此前的请求可能已收到，请先查看历史；停止等待不会重新发送或删除服务端记录。
             </p>
             <p v-else-if="pendingChat.state === 'stale'">
@@ -938,22 +961,26 @@ onUnmounted(() => {
             </p>
             <p v-else>原话还在，可以接着获取回答。</p>
             <button
-              v-if="pendingChat.mediaUnavailable"
+              v-if="!restoringChat && pendingChat.mediaUnavailable"
               @click="stopMissingMedia"
             >
               停止等待并查看历史
             </button>
             <button
-              v-else-if="pendingChat.state === 'stale'"
+              v-else-if="!restoringChat && pendingChat.state === 'stale'"
               @click="editOriginal"
             >
               调整原话
             </button>
-            <button v-else @click="act(() => chat.resume(true))">
+            <button
+              v-else-if="!restoringChat"
+              @click="act(() => chat.resume(true))"
+            >
               {{ pendingAction }}
             </button>
             <button
               v-if="
+                !restoringChat &&
                 !pendingChat.operation &&
                 pendingChat.job &&
                 ['failed', 'succeeded'].includes(pendingChat.job.status)
@@ -1127,6 +1154,7 @@ onUnmounted(() => {
           ref="libraryPage"
           v-else-if="tab === '资料与主题'"
           :sources="sources"
+          :can-use-wiki="account?.role === 'admin'"
           :topics="topics"
           :problems="problems"
           :context-id="knowledgeProblemId"

@@ -18,6 +18,7 @@ import type { ConversationChange, Problem } from "./types";
 
 const props = defineProps<{
   problems: Problem[];
+  accountName: string;
   selected: string;
   newProblem: boolean;
   activeTab: string;
@@ -230,9 +231,15 @@ defineExpose({ openMenu });
         >
           <Settings :size="18" /><span class="sidebar-label">设置</span>
         </button>
+        <span
+          v-if="accountName"
+          class="sidebar-account-name"
+          :title="accountName"
+          >{{ accountName }}</span
+        >
         <button
           class="icon-button"
-          title="退出登录"
+          title="退出登录并切换账号"
           aria-label="退出登录"
           @click="emit('logout')"
         >

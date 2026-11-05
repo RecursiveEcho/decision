@@ -294,3 +294,19 @@ it("drops an unavailable conversation's pending media only on an exact conversat
     );
   });
 });
+
+it("an account switch revokes old original bytes and gives the next account empty drafts", async () => {
+  const old = make();
+  old.setDraft("new", "synthetic old account");
+  await old.addFiles("new", [new File(["private synthetic bytes"], "old.txt")]);
+  const owner = sessionId(),
+    id = old.files.value.new[0].id;
+  setSession({
+    accessToken: "another-account",
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+  });
+  const next = make();
+  expect(next.drafts.value).toEqual({});
+  expect(next.files.value).toEqual({});
+  await expect(getMedia(owner, id, () => true)).rejects.toThrow();
+});

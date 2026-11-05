@@ -1,3 +1,13 @@
+export interface Account {
+  id: string;
+  username: string;
+  role: "admin" | "member";
+}
+export interface AuthSession {
+  accessToken: string;
+  expiresAt: string;
+  account: Account;
+}
 export interface Evidence {
   sourceId: string;
   quote: string;
