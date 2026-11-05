@@ -573,6 +573,160 @@ class BackendTest {
   }
 
   @Test
+  void archiveFiltersBeforePaginationAndRestoresLegacyWithHistory() throws Exception {
+    String a = problem(), b = problem(), active = problem();
+    s.db.update("UPDATE records SET data=data-'status' WHERE id=?::uuid", a);
+    for (String id : List.of(a, b)) {
+      postJson("/problems/" + id + "/messages", owner, Json.obj("content", "合成历史"), 202);
+      req(patch("/api/v1/problems/" + id), owner, Json.obj("status", "archived"), 200);
+    }
+    req(get("/api/v1/problems?status=deleted"), owner, null, 400);
+    req(get("/api/v1/problems?status="), owner, null, 400);
+    req(patch("/api/v1/problems/" + a), owner, Json.obj("status", "deleted"), 400);
+    req(patch("/api/v1/problems/" + a), owner, Json.obj("deleted", true), 400);
+    JsonNode current = req(get("/api/v1/problems?limit=1"), owner, null, 200);
+    assertEquals(active, current.at("/items/0/id").asText());
+    assertTrue(current.path("nextCursor").isNull());
+    JsonNode first = req(get("/api/v1/problems?status=archived&limit=1"), owner, null, 200);
+    String cursor = first.path("nextCursor").textValue();
+    assertNotNull(cursor);
+    JsonNode next =
+        req(
+            get("/api/v1/problems?status=archived&limit=1").param("cursor", cursor),
+            owner,
+            null,
+            200);
+    assertEquals(
+        Set.of(a, b), Set.of(first.at("/items/0/id").asText(), next.at("/items/0/id").asText()));
+    req(get("/api/v1/problems").param("cursor", cursor), owner, null, 400);
+    String path = "/api/v1/problems/" + a;
+    assertEquals("archived", req(get(path), owner, null, 200).path("status").asText());
+    assertEquals(
+        "合成历史", req(get(path + "/messages"), owner, null, 200).at("/items/0/content").asText());
+    req(patch(path), owner, Json.obj("status", "active"), 200);
+    assertEquals("active", req(get(path), owner, null, 200).path("status").asText());
+    s.db.update("UPDATE records SET data=data-'status' WHERE id=?::uuid", a);
+    assertEquals("active", req(get(path), owner, null, 200).path("status").asText());
+    assertEquals(2, req(get("/api/v1/problems"), owner, null, 200).path("items").size());
+  }
+
+  @Test
+  void replayOfLegacyCreateCannotUndoRenameArchiveOrDeletion() throws Exception {
+    ObjectNode body = Json.obj("title", "合成标题", "goal", "合成目标");
+    var create = post("/api/v1/problems").header("Idempotency-Key", Json.id());
+    String id = req(create, owner, body, 201).path("id").asText();
+    String path = "/api/v1/problems/" + id;
+    req(patch(path), owner, Json.obj("title", "合成新标题", "status", "archived"), 200);
+    JsonNode replay = req(create, owner, body, 201);
+    assertEquals("archived", replay.path("status").asText());
+    assertEquals("合成新标题", replay.path("title").asText());
+    req(delete(path), owner, null, 204);
+    req(create, owner, body, 404);
+    assertTrue(
+        req(get("/api/v1/problems?status=archived"), owner, null, 200).path("items").isEmpty());
+  }
+
+  @Test
+  void deletedConversationRejectsOldLinksAttachmentsKeysAndRetryButKeepsLibrary() throws Exception {
+    String key = Json.id(), sendKey = Json.id(), retryKey = Json.id();
+    ObjectNode body =
+        Json.obj(
+            "content",
+            "合成首句",
+            "attachments",
+            Json.arr()
+                .add(Json.obj("name", "synthetic.txt", "dataUrl", "data:text/plain;base64,YQ==")));
+    var create = post("/api/v1/conversations").header("Idempotency-Key", key);
+    JsonNode first = req(create, owner, body, 202);
+    String p = first.at("/problem/id").asText(), job = first.at("/job/id").asText();
+    String path = "/api/v1/problems/" + p;
+    String attachment =
+        req(get(path + "/messages"), owner, null, 200).at("/items/0/attachments/0/id").asText();
+    assertFalse(attachment.isEmpty());
+    assertTrue(worker.runOne());
+    var retry = post("/api/v1/jobs/" + job + "/retry").header("Idempotency-Key", retryKey);
+    req(retry, owner, Json.obj(), 202);
+    var send = post(path + "/messages").header("Idempotency-Key", sendKey);
+    var followup = Json.obj("content", "合成续聊");
+    req(send, owner, followup, 202);
+    JsonNode mem =
+        postJson(
+            "/memories",
+            owner,
+            Json.obj("problemId", p, "kind", "user_reported", "content", "合成陈述"),
+            201);
+    String source = mem.at("/evidence/0/sourceId").asText();
+    String another = problem();
+    long revision = s.version();
+    req(delete(path), null, null, 401);
+    req(delete(path), device().path("deviceToken").asText(), null, 403);
+    req(delete(path), owner, null, 204);
+    req(delete(path), owner, null, 404);
+    for (String url :
+        List.of(
+            path, path + "/messages", "/api/v1/jobs/" + job, "/api/v1/attachments/" + attachment))
+      req(get(url), owner, null, 404);
+    req(patch(path), owner, Json.obj("status", "active"), 404);
+    req(create, owner, body, 404);
+    req(send, owner, followup, 404);
+    req(retry, owner, Json.obj(), 404);
+    postJson("/jobs/" + job + "/retry", owner, Json.obj(), 404);
+    postJson("/problems/" + p + "/messages", owner, followup, 404);
+    assertEquals(revision, s.version());
+    worker.recover();
+    assertFalse(worker.runOne());
+    assertEquals(1, s.all("problem", null).size());
+    assertEquals(
+        another, req(get("/api/v1/problems"), owner, null, 200).at("/items/0/id").asText());
+    assertEquals(mem.path("id"), req(get("/api/v1/memories"), owner, null, 200).at("/items/0/id"));
+    req(get("/api/v1/sources/" + source), owner, null, 200);
+  }
+
+  @Test
+  void deletionWhileModelIsRespondingDiscardsReplyAndLeavesOtherChatUsable() throws Exception {
+    JsonNode start = postJson("/conversations", owner, Json.obj("content", "将删除的合成讨论"), 202);
+    String p = start.at("/problem/id").asText();
+    var entered = new java.util.concurrent.CountDownLatch(1);
+    var resume = new java.util.concurrent.CountDownLatch(1);
+    var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+    var server =
+        modelServer(
+            request -> {
+              entered.countDown();
+              try {
+                if (!resume.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                  throw new IllegalStateException();
+              } catch (InterruptedException e) {
+                throw new IllegalStateException(e);
+              }
+              return Json.obj(
+                  "content", "迟到的合成回答", "evidence", Json.arr(), "uncertainties", Json.arr());
+            });
+    try {
+      JsonNode other = postJson("/conversations", owner, Json.obj("content", "独立的合成讨论"), 202);
+      var task = executor.submit(() -> worker.runOne());
+      assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS));
+      req(delete("/api/v1/problems/" + p), owner, null, 204);
+      resume.countDown();
+      assertTrue(task.get(10, java.util.concurrent.TimeUnit.SECONDS));
+      assertTrue(s.all("message", p).isEmpty());
+      assertEquals(
+          "cancelled",
+          s.db.queryForObject(
+              "SELECT state FROM jobs WHERE id=?::uuid",
+              String.class,
+              start.at("/job/id").asText()));
+      assertTrue(worker.runOne());
+      assertEquals("succeeded", job(other.at("/job/id").asText()).path("status").asText());
+      assertEquals(2, s.all("message", other.at("/problem/id").asText()).size());
+    } finally {
+      resume.countDown();
+      executor.shutdownNow();
+      server.stop(0);
+    }
+  }
+
+  @Test
   void manualRenameIsNeverReplacedAndOldChatsAreNotAutoNamed() throws Exception {
     JsonNode start = postJson("/conversations", owner, Json.obj("content", "原始标题"), 202);
     String p = start.path("problem").path("id").asText();
@@ -580,10 +734,6 @@ class BackendTest {
     req(patch("/api/v1/problems/" + p), owner, Json.obj("title", "原始标题"), 200);
     assertFalse(
         s.db.queryForObject("SELECT auto_title FROM records WHERE id=?::uuid", Boolean.class, p));
-    assertTrue(worker.runOne());
-    assertEquals(
-        "CONTEXT_CHANGED",
-        job(start.path("job").path("id").asText()).path("error").path("code").asText());
     var server =
         modelServer(
             request ->
@@ -597,6 +747,9 @@ class BackendTest {
                     "conversationTitle",
                     "模型不应覆盖的标题"));
     try {
+      assertTrue(worker.runOne());
+      assertEquals("succeeded", job(start.path("job").path("id").asText()).path("status").asText());
+      assertEquals("原始标题", s.get("problem", p).path("title").asText());
       postJson("/problems/" + p + "/messages", owner, Json.obj("content", "继续聊"), 202);
       assertTrue(worker.runOne());
       assertEquals("原始标题", s.get("problem", p).path("title").asText());
