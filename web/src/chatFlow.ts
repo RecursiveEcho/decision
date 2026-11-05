@@ -122,6 +122,21 @@ export function useChatFlow(callbacks: {
     drafts.value[target] = value;
     save();
   }
+  function discardDraft(target: string) {
+    const ids = (files.value[target] || []).map((file) => file.id);
+    delete drafts.value[target];
+    delete files.value[target];
+    delete thinking.value[target];
+    save();
+    if (ids.length) release(ids);
+  }
+  function discardMissingConversation(id: string) {
+    const operation = pending.value;
+    if (operation?.problemId !== id) return;
+    pending.value = null;
+    save();
+    release(mediaIds(operation));
+  }
   function clear() {
     owner = "";
     pending.value = null;
@@ -358,6 +373,8 @@ export function useChatFlow(callbacks: {
     setThinking,
     restore,
     setDraft,
+    discardDraft,
+    discardMissingConversation,
     clear,
     send,
     resume,

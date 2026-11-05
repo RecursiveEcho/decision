@@ -47,7 +47,13 @@ export function useKnowledge() {
     const active = () =>
       !!who && g === generation && p === problemId && who === sessionId();
     const save = () => {
-      if (active()) saveKnowledgeOperations(who, operations);
+      if (!active()) return;
+      // Another conversation may have been archived while this one stayed open.
+      const latest = readKnowledgeOperations(who);
+      const operation = operations.get(p);
+      if (operation) latest.set(p, operation);
+      else latest.delete(p);
+      saveKnowledgeOperations(who, latest);
     };
     const clear = () => {
       operations.delete(p);

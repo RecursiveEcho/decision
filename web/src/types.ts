@@ -3,7 +3,12 @@ export interface Evidence {
   quote: string;
   relation: string;
 }
+export type ConversationChange =
+  | { title: string }
+  | { status: "active" | "archived" }
+  | "delete";
 export interface Problem {
+  status?: "active" | "archived";
   id: string;
   title: string;
   goal: string;
