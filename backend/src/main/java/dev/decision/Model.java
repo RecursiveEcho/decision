@@ -117,7 +117,7 @@ class Model {
                   "untrustedConversation",
                   recent,
                   "untrustedKnowledge",
-                  Knowledge.chatContext(s, p, work.path("content").asText()),
+                  Knowledge.chatContext(s, c, p, work.path("content").asText()),
                   "autoTitle",
                   work.path("autoTitle").asBoolean(false),
                   "thinking",
@@ -187,7 +187,9 @@ class Model {
       format +=
           "uncertainties只列本题实际缺失的信息、读取范围限制、识别不确定或推断条件；没有实际未知时返回[]。不要例行加入‘不是个人事实’或‘没有Source引用’的泛化免责声明，附件有可读原件与coverage，不因evidence为空暗示附件未读。"
               + ChatMemory.prompt()
-              + DecisionCapture.prompt();
+              + DecisionCapture.prompt()
+              + " 可选布尔字段suggestKnowledge默认false。仅当本轮讨论已自然收敛为明确、值得长期复用的结论，或对既有知识补充了新的适用条件、例外、修订时返回true。"
+              + "单纯提问、仍在探索的选项、临时安排、情绪表达、仅复述已有知识以及普通个人偏好均不触发。不要为建议入库打断对话，不在正文声称已经生成或保存。";
     ObjectNode payload =
         Json.obj(
             "model",

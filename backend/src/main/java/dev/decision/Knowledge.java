@@ -4,7 +4,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /** Owner-reviewed knowledge. Proposals never change the old automatic Topic/Wiki pipeline. */
 @Component
@@ -14,11 +18,15 @@ class Knowledge {
   final Store s;
   final Config c;
   final Model model;
+  private final TransactionTemplate suggestionSavepoint;
+  private static final Logger log = LoggerFactory.getLogger(Knowledge.class);
 
   Knowledge(Store s, Config c, Model model) {
     this.s = s;
     this.c = c;
     this.model = model;
+    suggestionSavepoint = new TransactionTemplate(s.tx.getTransactionManager());
+    suggestionSavepoint.setPropagationBehavior(TransactionDefinition.PROPAGATION_NESTED);
   }
 
   record Snapshot(String fingerprint, ObjectNode input, ObjectNode coverage) {}
@@ -30,6 +38,38 @@ class Knowledge {
 
   ObjectNode request(String problemId, JsonNode body) {
     emptyBody(body);
+    return request(problemId, false);
+  }
+
+  // Called inside the chat completion transaction, after both messages have their final epoch.
+  void suggest(String problemId, String userMessageId, String assistantMessageId) {
+    try {
+      suggestionSavepoint.executeWithoutResult(
+          ignored -> {
+            String latestUser =
+                s.db.queryForObject(
+                    "SELECT id::text FROM records WHERE kind='message' AND NOT deleted AND"
+                        + " problem_id=?::uuid AND data->>'role'='user' ORDER BY chat_source_seq"
+                        + " DESC LIMIT 1",
+                    String.class,
+                    problemId);
+            if (!userMessageId.equals(latestUser)) return;
+            ObjectNode job = request(problemId, true);
+            if (job == null) return;
+            s.db.update(
+                "UPDATE records SET data=jsonb_set(data,'{knowledgeSuggestion}',?::jsonb) WHERE"
+                    + " id=?::uuid",
+                Json.obj("jobId", job.path("id")).toString(),
+                assistantMessageId);
+          });
+    } catch (RuntimeException ex) {
+      // A full queue or failed optional write must not roll back the completed answer.
+      log.warn(
+          "Could not schedule optional knowledge suggestion ({})", ex.getClass().getSimpleName());
+    }
+  }
+
+  private ObjectNode request(String problemId, boolean onlyNew) {
     Snapshot snapshot = snapshot(problemId);
     if (snapshot.coverage.path("messagesConsidered").asInt() == 0
         && snapshot.coverage.path("sourcesConsidered").asInt() == 0)
@@ -43,11 +83,11 @@ class Knowledge {
             snapshot.fingerprint);
     for (String id : candidates) {
       ObjectNode job = s.get("job", id);
-      if (!job.path("status").asText().equals("succeeded")) return job;
+      if (!job.path("status").asText().equals("succeeded")) return onlyNew ? null : job;
       String proposalId = job.path("result").path("proposalId").asText();
       if (!proposalId.isBlank()
           && s.get("knowledge_proposal", proposalId).path("status").asText().equals("pending"))
-        return job;
+        return onlyNew ? null : job;
     }
     return s.job(
         "knowledge_proposal",
@@ -61,14 +101,17 @@ class Knowledge {
     Snapshot before =
         s.write(
             () -> {
+              if (!s.jobRunning(work)) return null;
               Snapshot current = snapshot(p);
               requireFingerprint(work.path("fingerprint").asText(), current);
               return current;
             });
+    if (before == null) return;
     ObjectNode output = model.knowledge(p, before.input.deepCopy());
     ObjectNode candidate = validate(output, before);
     s.write(
         () -> {
+          if (!s.jobRunning(work)) return null;
           requireFingerprint(before.fingerprint, snapshot(p));
           candidate.put("problemId", p);
           candidate.put("status", "pending");
@@ -87,15 +130,20 @@ class Knowledge {
   }
 
   Snapshot snapshot(String problemId) {
+    return snapshot(s, c, problemId);
+  }
+
+  private static Snapshot snapshot(Store s, Config c, String problemId) {
     String p = s.get("problem", problemId).path("id").asText();
     long revision = s.version();
     long epoch = s.db.queryForObject("SELECT epoch FROM chat_memory_state WHERE id=1", Long.class);
     List<ObjectNode> allMessages = s.all("message", p);
     List<ObjectNode> eligibleMessages =
         s.db.query(
-            "SELECT data::text FROM records WHERE kind='message' AND NOT deleted"
-                + " AND problem_id=?::uuid AND context_revision=? AND memory_epoch=?"
-                + " ORDER BY created_at,id",
+            // Linking the derived job must not make its own input snapshot stale.
+            "SELECT (data - 'knowledgeSuggestion')::text FROM records WHERE kind='message' AND NOT"
+                + " deleted AND problem_id=?::uuid AND context_revision=? AND memory_epoch=? ORDER"
+                + " BY created_at,id",
             (rs, i) -> (ObjectNode) Json.parse(rs.getString(1)),
             p,
             revision,
@@ -235,7 +283,7 @@ class Knowledge {
   }
 
   /** Called under Model's snapshot transaction; never causes model calls or writes. */
-  static ObjectNode chatContext(Store s, String p, String query) {
+  static ObjectNode chatContext(Store s, Config c, String p, String query) {
     ArrayNode entries = Json.arr();
     List<ObjectNode> all = s.all("knowledge_entry", null);
     for (ObjectNode e : ranked(all, query)) {
@@ -262,17 +310,16 @@ class Knowledge {
     JsonNode pending = Json.M.nullNode();
     for (ObjectNode proposal : proposals)
       if (proposal.path("status").asText().equals("pending")
+          && !proposal.path("action").asText().equals("skip")
           && liveReferences(s, proposal.path("refs"))
           && currentMessageReferences(s, proposal.path("refs"))) {
         ObjectNode discussion = proposal.deepCopy();
-        discussion.put("requiresRefresh", false);
+        addFreshness(s, c, discussion, new HashMap<>());
         if (proposal.hasNonNull("targetEntryId")) {
           try {
             ObjectNode current = s.get("knowledge_entry", proposal.path("targetEntryId").asText());
             discussion.set("targetCurrentRevision", current.path("revision"));
-            discussion.put(
-                "requiresRefresh",
-                current.path("revision").asInt() != proposal.path("targetRevision").asInt());
+
           } catch (ApiError e) {
             discussion.put("requiresRefresh", true);
             discussion.putNull("targetCurrentRevision");
@@ -410,6 +457,23 @@ class Knowledge {
   void requireFingerprint(String expected, Snapshot current) {
     if (!expected.equals(current.fingerprint))
       throw new ApiError(409, "KNOWLEDGE_CHANGED", "对话、资料或已有知识已变化，请重新整理后再确认", true);
+  }
+
+  // Project freshness on read; keep draft content and confirm-time validation independent.
+  void addFreshness(ObjectNode proposal, Map<String, String> fingerprints) {
+    addFreshness(s, c, proposal, fingerprints);
+  }
+
+  private static void addFreshness(
+      Store s, Config c, ObjectNode proposal, Map<String, String> fingerprints) {
+    if (!proposal.path("status").asText().equals("pending")) return;
+    String p = proposal.path("problemId").asText();
+    // The fingerprint includes all confirmed entries and their current target revisions.
+    String current = fingerprints.computeIfAbsent(p, key -> snapshot(s, c, key).fingerprint);
+    proposal.put(
+        "requiresRefresh",
+        !current.equals(proposal.path("contextFingerprint").asText())
+            || !liveReferences(s, proposal.path("refs")));
   }
 
   ObjectNode accept(String id, JsonNode body) {

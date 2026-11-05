@@ -230,6 +230,224 @@ class KnowledgeTest {
         status);
   }
 
+  ObjectNode reply(JsonNode intent) {
+    ObjectNode response =
+        Json.obj(
+            "content", "合成结论：重试同一写入时复用幂等键。", "evidence", Json.arr(), "uncertainties", Json.arr());
+    if (intent != null) response.set("suggestKnowledge", intent);
+    return response;
+  }
+
+  JsonNode sendAndReadAnswer(String p, String content) throws Exception {
+    JsonNode chat = postBody("/problems/" + p + "/messages", Json.obj("content", content), 202);
+    assertTrue(worker.runOne());
+    JsonNode done = request(get("/api/v1/jobs/" + chat.path("id").asText()), null, 200);
+    assertEquals("succeeded", done.path("status").asText());
+    JsonNode history = request(get("/api/v1/problems/" + p + "/messages"), null, 200).path("items");
+    String id = done.at("/result/assistantMessageId").asText();
+    for (JsonNode message : history) if (message.path("id").asText().equals(id)) return message;
+    throw new AssertionError("Assistant message missing after successful chat");
+  }
+
+  @Test
+  void onlyBooleanTrueCanCreateSuggestionAndOrdinaryChatMakesOneCall() throws Exception {
+    String p = problem().path("id").asText();
+    for (JsonNode intent :
+        Arrays.<JsonNode>asList(
+            null, Json.M.valueToTree(false), Json.M.valueToTree("true"), Json.M.valueToTree(1))) {
+      try (Gateway gateway = new Gateway(in -> reply(intent))) {
+        assertFalse(sendAndReadAnswer(p, "合成：还在探索。").has("knowledgeSuggestion"));
+        assertFalse(worker.runOne());
+        assertEquals(1, gateway.calls.get());
+        assertTrue(gateway.payload.at("/messages/0/content").asText().contains("suggestKnowledge"));
+      }
+    }
+  }
+
+  @Test
+  void suggestedJobPersistsAndSharesOneDraftWithConcurrentManualRequests() throws Exception {
+    String p = problem().path("id").asText();
+    try (Gateway gateway =
+        new Gateway(
+            in ->
+                in.has("request")
+                    ? reply(Json.M.valueToTree(true))
+                    : candidate(in, "create", "重试写入应复用幂等键。"))) {
+      JsonNode answer = sendAndReadAnswer(p, "合成：我们收敛为重试沿用原有键。");
+      String jobId = answer.at("/knowledgeSuggestion/jobId").textValue();
+      assertNotNull(jobId);
+      var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+      try {
+        java.util.concurrent.Callable<JsonNode> submit =
+            () -> postBody("/problems/" + p + "/knowledge-proposals", Json.obj(), 202);
+        for (var task : executor.invokeAll(List.of(submit, submit)))
+          assertEquals(jobId, task.get().path("id").asText());
+      } finally {
+        executor.shutdownNow();
+      }
+      assertTrue(worker.runOne());
+      assertFalse(worker.runOne());
+      JsonNode job = request(get("/api/v1/jobs/" + jobId), null, 200);
+      String draft = job.at("/result/proposalId").asText();
+      JsonNode proposal = request(get("/api/v1/knowledge-proposals/" + draft), null, 200);
+      assertEquals(Json.M.valueToTree(false), proposal.get("requiresRefresh"));
+      assertEquals("pending", proposal.path("status").asText());
+      assertTrue(s.all("knowledge_entry", null).isEmpty());
+      assertEquals(2, gateway.calls.get());
+      worker.recover();
+      assertEquals(
+          jobId,
+          s.get("message", answer.path("id").asText()).at("/knowledgeSuggestion/jobId").asText());
+      assertEquals(
+          jobId,
+          postBody("/problems/" + p + "/knowledge-proposals", Json.obj(), 202).path("id").asText());
+      assertFalse(worker.runOne());
+      accept(proposal, 200);
+      assertEquals(1, s.all("knowledge_entry", null).size());
+    }
+  }
+
+  @Test
+  void newerConclusionCanReplaceStaleDraftButQueuedOlderTurnDoesNotSuggest() throws Exception {
+    String p = problem().path("id").asText();
+    try (Gateway gateway =
+        new Gateway(
+            in ->
+                in.has("request")
+                    ? reply(Json.M.valueToTree(true))
+                    : candidate(in, "create", "合成长期结论"))) {
+      postBody("/problems/" + p + "/messages", Json.obj("content", "合成旧轮"), 202);
+      postBody("/problems/" + p + "/messages", Json.obj("content", "合成新轮"), 202);
+      assertTrue(worker.runOne());
+      assertTrue(s.all("message", p).stream().noneMatch(m -> m.has("knowledgeSuggestion")));
+      assertTrue(worker.runOne());
+      assertTrue(worker.runOne());
+      ObjectNode old = s.all("knowledge_proposal", p).get(0);
+      assertTrue(sendAndReadAnswer(p, "合成：补充稳定的适用边界。").has("knowledgeSuggestion"));
+      assertTrue(
+          request(get("/api/v1/knowledge-proposals/" + old.path("id").asText()), null, 200)
+              .path("requiresRefresh")
+              .asBoolean());
+      assertTrue(
+          request(get("/api/v1/knowledge-proposals").param("problemId", p), null, 200)
+              .at("/items/0/requiresRefresh")
+              .asBoolean());
+      assertFalse(s.get("knowledge_proposal", old.path("id").asText()).has("requiresRefresh"));
+      assertTrue(
+          Knowledge.chatContext(s, c, p, "新结论").at("/pendingProposal/requiresRefresh").asBoolean());
+      accept(old, 409);
+      assertTrue(worker.runOne());
+      assertEquals(2, s.all("knowledge_proposal", p).size());
+      assertTrue(s.all("knowledge_entry", null).isEmpty());
+    }
+  }
+
+  @Test
+  void failedOptionalInsertRollsBackOnlySuggestionAndNextChatStillWorks() throws Exception {
+    String p = problem().path("id").asText();
+    // Fail the second of the two job inserts, after its records row already exists.
+    s.db.execute(
+        "ALTER TABLE jobs ADD CONSTRAINT synthetic_reject_knowledge"
+            + " CHECK(input->>'operation'<>'knowledge_proposal')");
+    try (Gateway gateway = new Gateway(in -> reply(Json.M.valueToTree(true)))) {
+      assertFalse(sendAndReadAnswer(p, "合成值得保留的结论").has("knowledgeSuggestion"));
+      assertFalse(worker.runOne());
+      assertEquals(1, s.all("job", p).size());
+      assertEquals(1, gateway.calls.get());
+    } finally {
+      s.db.execute("ALTER TABLE jobs DROP CONSTRAINT synthetic_reject_knowledge");
+    }
+    try (Gateway gateway = new Gateway(in -> reply(Json.M.valueToTree(false)))) {
+      assertFalse(sendAndReadAnswer(p, "继续合成讨论").has("knowledgeSuggestion"));
+    }
+  }
+
+  @Test
+  void retryOfChatEmitsOneSuggestionAndWithdrawnSnapshotNeverProducesDraft() throws Exception {
+    String p = problem().path("id").asText();
+    JsonNode memory =
+        postBody(
+            "/memories", Json.obj("problemId", p, "kind", "user_reported", "content", "合成前提"), 201);
+    String failed =
+        postBody("/problems/" + p + "/messages", Json.obj("content", "结论依赖该前提"), 202)
+            .path("id")
+            .asText();
+    assertTrue(worker.runOne());
+    assertEquals("failed", s.get("job", failed).path("status").asText());
+    try (Gateway gateway = new Gateway(in -> reply(Json.M.valueToTree(true)))) {
+      String retryPath = "/jobs/" + failed + "/retry";
+      JsonNode retry = postBody(retryPath, Json.obj(), 202);
+      assertTrue(worker.runOne());
+      assertEquals(retry.path("id"), postBody(retryPath, Json.obj(), 202).path("id"));
+      String assistant =
+          s.get("job", retry.path("id").asText()).at("/result/assistantMessageId").asText();
+      String suggestion = s.get("message", assistant).at("/knowledgeSuggestion/jobId").asText();
+      assertFalse(suggestion.isEmpty());
+      request(
+          patch("/api/v1/memories/" + memory.path("id").asText()),
+          Json.obj("status", "retracted", "expectedRevision", 1),
+          200);
+      assertTrue(worker.runOne());
+      assertEquals("KNOWLEDGE_CHANGED", s.get("job", suggestion).at("/error/code").asText());
+      assertEquals(1, gateway.calls.get());
+      assertTrue(s.all("knowledge_proposal", p).isEmpty());
+      assertTrue(s.all("knowledge_entry", null).isEmpty());
+      assertFalse(worker.runOne());
+    }
+  }
+
+  @Test
+  void deleteCancelsAutomaticDraftWithoutCallingModelOrRevivingMessage() throws Exception {
+    String p = problem().path("id").asText();
+    try (Gateway gateway = new Gateway(in -> reply(Json.M.valueToTree(true)))) {
+      JsonNode answer = sendAndReadAnswer(p, "合成结论");
+      String job = answer.at("/knowledgeSuggestion/jobId").asText();
+      assertFalse(job.isEmpty());
+      assertEquals(
+          204,
+          mvc.perform(delete("/api/v1/problems/" + p).header("Authorization", "Bearer " + owner))
+              .andReturn()
+              .getResponse()
+              .getStatus());
+      worker.recover();
+      assertFalse(worker.runOne());
+      request(get("/api/v1/jobs/" + job), null, 404);
+      assertTrue(s.all("message", p).isEmpty());
+      assertTrue(s.all("knowledge_proposal", p).isEmpty());
+      assertTrue(s.all("knowledge_entry", null).isEmpty());
+      assertEquals(1, gateway.calls.get());
+    }
+  }
+
+  @Test
+  void skipAndModelFailureLeaveSavedAnswerAndKnowledgeIntact() throws Exception {
+    for (boolean skip : List.of(true, false)) {
+      String p = problem().path("id").asText();
+      try (Gateway gateway =
+          new Gateway(
+              in ->
+                  in.has("request")
+                      ? reply(Json.M.valueToTree(true))
+                      : skip ? candidate(in, "skip", "") : Json.obj("invalid", true))) {
+        JsonNode answer = sendAndReadAnswer(p, "合成讨论");
+        assertTrue(worker.runOne());
+        JsonNode job =
+            request(
+                get("/api/v1/jobs/" + answer.at("/knowledgeSuggestion/jobId").asText()), null, 200);
+        assertEquals(skip ? "succeeded" : "failed", job.path("status").asText());
+        if (skip) {
+          JsonNode proposal = s.get("knowledge_proposal", job.at("/result/proposalId").asText());
+          assertEquals("skip", proposal.path("action").asText());
+          accept(proposal, 409);
+        } else assertTrue(s.all("knowledge_proposal", p).isEmpty());
+        assertEquals(
+            answer.path("content"), s.get("message", answer.path("id").asText()).path("content"));
+        assertTrue(s.all("knowledge_entry", null).isEmpty());
+        assertFalse(worker.runOne());
+      }
+    }
+  }
+
   @Test
   void confirmedKnowledgeKeepsSnapshotAndHistoryWhenOriginalChatIsDeleted() throws Exception {
     String p = problem().path("id").asText();
@@ -479,12 +697,12 @@ class KnowledgeTest {
     message(p, "合成：有幂等键时可重试。");
     try (Gateway gateway = new Gateway(in -> candidate(in, "create", "讨论结论"))) {
       JsonNode proposal = prepare(p);
-      ObjectNode pending = s.write(() -> Knowledge.chatContext(s, p, "幂等"));
+      ObjectNode pending = s.write(() -> Knowledge.chatContext(s, c, p, "幂等"));
       assertEquals(proposal.path("id"), pending.path("pendingProposal").path("id"));
       assertEquals(0, pending.path("entries").size());
       accept(proposal, 200);
       String second = problem().path("id").asText();
-      ObjectNode available = s.write(() -> Knowledge.chatContext(s, second, "幂等"));
+      ObjectNode available = s.write(() -> Knowledge.chatContext(s, c, second, "幂等"));
       assertEquals(1, available.path("entries").size());
       assertTrue(available.path("pendingProposal").isNull());
       assertTrue(available.path("notice").asText().contains("不是已证实事实"));

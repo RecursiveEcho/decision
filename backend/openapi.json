@@ -6669,6 +6669,19 @@
           },
           "decisionRecord": {
             "$ref": "#/components/schemas/Decision"
+          },
+          "knowledgeSuggestion": {
+            "type": "object",
+            "description": "Optional assistant message link to a proposed knowledge draft. GET the job, then load result.proposalId on success.",
+            "properties": {
+              "jobId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "jobId"
+            ]
           }
         },
         "required": [
@@ -7743,6 +7756,10 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "requiresRefresh": {
+            "type": "boolean",
+            "description": "Computed on GET for pending proposals. True means the original snapshot or references are stale; confirmation will recheck."
           }
         },
         "required": [
