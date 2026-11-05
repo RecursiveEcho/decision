@@ -249,3 +249,48 @@ it("rejects unsupported, empty, over-count and over-size files before upload", a
     ),
   ).toThrow("16 MiB");
 });
+
+it("discards only the managed conversation's draft, media and thinking across reload", async () => {
+  const flow = make();
+  for (const id of ["target", "other", "new"]) {
+    flow.setDraft(id, id);
+    flow.setThinking(id, "high");
+    await flow.addFiles(id, [new File([id], id + ".txt")]);
+  }
+  const removed = flow.files.value.target[0].id;
+  flow.discardDraft("target");
+  const restored = make();
+  expect(Object.keys(restored.drafts.value)).toEqual(["other", "new"]);
+  expect(restored.files.value.target).toBeUndefined();
+  expect(restored.thinking.value.target).toBeUndefined();
+  await vi.waitFor(async () => {
+    await expect(getMedia(sessionId(), removed, () => true)).rejects.toThrow(
+      "不可用",
+    );
+  });
+  for (const id of ["other", "new"]) {
+    const [original] = await getMedia(
+      sessionId(),
+      restored.files.value[id][0].id,
+      () => true,
+    );
+    expect(await original.blob.text()).toBe(id);
+  }
+});
+
+it("drops an unavailable conversation's pending media only on an exact conversation match", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(fail()));
+  const flow = make();
+  await flow.addFiles("target", [new File(["one"], "one.txt")]);
+  await expect(flow.send("target")).rejects.toThrow();
+  const snapshot = flow.pending.value!.mediaKey!;
+  flow.discardMissingConversation("other");
+  expect(make().pending.value?.mediaKey).toBe(snapshot);
+  flow.discardMissingConversation("target");
+  expect(make().pending.value).toBeNull();
+  await vi.waitFor(async () => {
+    await expect(getMedia(sessionId(), snapshot, () => true)).rejects.toThrow(
+      "不可用",
+    );
+  });
+});

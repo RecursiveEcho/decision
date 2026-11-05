@@ -11,7 +11,8 @@ import {
   LogOut,
   X,
 } from "@lucide/vue";
-import type { Problem } from "./types";
+import ConversationHistory from "./ConversationHistory.vue";
+import type { ConversationChange, Problem } from "./types";
 
 const props = defineProps<{
   problems: Problem[];
@@ -24,6 +25,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   select: [id: string];
+  change: [id: string, value: ConversationChange];
   new: [];
   tool: [tab: string];
   logout: [];
@@ -64,7 +66,7 @@ function navigate(action: () => void) {
   action();
 }
 function keydown(event: KeyboardEvent) {
-  if (!mobileOpen.value) return;
+  if (!mobileOpen.value || sidebar.value?.querySelector("dialog[open]")) return;
   if (event.key === "Escape") {
     event.preventDefault();
     closeMenu();
@@ -182,25 +184,13 @@ defineExpose({ openMenu });
     >
       <History :size="19" />
     </button>
-    <section class="history-section" aria-label="历史对话">
-      <h2>最近对话</h2>
-      <p v-if="!problems.length" class="history-empty">对话会保存在这里</p>
-      <ul v-else class="history-list">
-        <li v-for="item in problems" :key="item.id">
-          <button
-            :class="{ active: !newProblem && selected === item.id }"
-            :aria-current="
-              !newProblem && selected === item.id ? 'page' : undefined
-            "
-            :title="item.title"
-            :disabled="busy || pending"
-            @click="navigate(() => emit('select', item.id))"
-          >
-            <span>{{ item.title }}</span>
-          </button>
-        </li>
-      </ul>
-    </section>
+    <ConversationHistory
+      :problems="problems"
+      :selected="newProblem ? '' : selected"
+      :disabled="busy || pending"
+      @select="(id) => navigate(() => emit('select', id))"
+      @change="(id, value) => navigate(() => emit('change', id, value))"
+    />
     <div class="sidebar-bottom">
       <nav class="tool-rail" aria-label="工作台工具">
         <span

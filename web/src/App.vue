@@ -17,7 +17,10 @@ import ChatRecords from "./ChatRecords.vue";
 import MemoryPage from "./MemoryPage.vue";
 import KnowledgeConversation from "./KnowledgeConversation.vue";
 import LibraryPage from "./LibraryPage.vue";
-import { readKnowledgeOperations } from "./knowledgeStorage";
+import {
+  readKnowledgeOperations,
+  saveKnowledgeOperations,
+} from "./knowledgeStorage";
 import { useMemoryOverview } from "./memoryOverview";
 import {
   ArrowUp,
@@ -34,6 +37,7 @@ import { useChatFlow } from "./chatFlow";
 import type {
   Evidence,
   Decision,
+  ConversationChange,
   Job,
   Memory,
   Message,
@@ -80,9 +84,43 @@ const problem = computed(() =>
     : problems.value.find((p) => p.id === selected.value),
 );
 const knowledgeProblemId = computed(() => problem.value?.id || "");
-function openSourceConversation(id: string) {
+function storeProblem(id: string, updated: Problem | null) {
+  const index = problems.value.findIndex((item) => item.id === id);
+  if (index >= 0)
+    problems.value.splice(index, 1, ...(updated ? [updated] : []));
+  else if (updated) problems.value.unshift(updated);
+}
+async function readProblem(id: string) {
+  try {
+    return await request<Problem>(`/problems/${encodeURIComponent(id)}`);
+  } catch (failure) {
+    if (failure instanceof ApiError && failure.status === 404) return null;
+    throw failure;
+  }
+}
+async function openConversation(id: string) {
   if (!id || busy.value || pendingChat.value) return;
-  displayedProblem.value = id;
+  await act(async () => {
+    const item = await readProblem(id);
+    if (!item) {
+      storeProblem(id, null);
+      const inLibrary = tab.value === "资料与主题";
+      if (selected.value === id) {
+        selected.value = "";
+        newProblem.value = true;
+        await nextTick();
+        await load();
+      }
+      discardConversationState(id);
+      throw new Error(
+        inLibrary ? "原对话已删除，仍可在这里查看资料。" : "这段对话已删除。",
+      );
+    }
+    storeProblem(id, item);
+    displayedProblem.value = id;
+    await nextTick();
+    await load();
+  });
 }
 const messages = ref<Message[]>([]),
   sources = ref<Source[]>([]),
@@ -270,6 +308,10 @@ watch(chatDraft, () => void nextTick(resizeComposer));
 watch(composerInput, () => void nextTick(resizeComposer));
 async function openNewProblem() {
   if (busy.value || pendingChat.value) return;
+  await enterNewConversation();
+}
+async function enterNewConversation() {
+  selected.value = "";
   newProblem.value = true;
   tab.value = "讨论";
   editingGoal.value = false;
@@ -371,16 +413,67 @@ function clearData() {
   topics.value = [];
 }
 async function loadProblems() {
-  problems.value = await list<Problem>("/problems");
-  if (
-    !pendingChat.value?.problemId &&
-    !problems.value.some((p) => p.id === selected.value)
-  )
-    selected.value = problems.value[0]?.id || "";
+  const [recent, archived] = await Promise.all([
+    list<Problem>("/problems"),
+    list<Problem>("/problems?status=archived"),
+  ]);
+  problems.value = [
+    ...recent,
+    ...archived.filter((item) => item.status === "archived"),
+  ];
+}
+function discardConversationState(id: string) {
+  chat.discardDraft(id);
+  const owner = sessionId();
+  const operations = readKnowledgeOperations(owner);
+  if (operations.delete(id)) saveKnowledgeOperations(owner, operations);
+}
+async function changeConversation(id: string, change: ConversationChange) {
+  if (busy.value || pendingChat.value || chat.preparing.value) return;
+  await act(async () => {
+    const path = `/problems/${encodeURIComponent(id)}`;
+    let updated: Problem | null = null;
+    try {
+      if (change === "delete") await request(path, "DELETE");
+      else updated = await request<Problem>(path, "PATCH", change);
+    } catch (failure) {
+      if (!(failure instanceof ApiError && failure.status === 404))
+        throw failure;
+    }
+    storeProblem(id, updated);
+    if (
+      !updated ||
+      (typeof change === "object" &&
+        "status" in change &&
+        change.status === "archived")
+    ) {
+      if (selected.value === id) await enterNewConversation();
+      discardConversationState(id);
+    }
+    if (!updated && change !== "delete") throw new Error("这段对话已删除。");
+    await loadProblems();
+  });
 }
 async function refresh() {
   const currentLibrary = libraryPage.value;
+  const previous = problem.value;
   await loadProblems();
+  if (previous && selected.value === previous.id) {
+    const current =
+      problems.value.find((item) => item.id === previous.id) ||
+      (await readProblem(previous.id));
+    if (
+      !current ||
+      (previous.status !== "archived" &&
+        current.status === "archived" &&
+        !pendingChat.value)
+    ) {
+      if (!current) chat.discardMissingConversation(previous.id);
+      discardConversationState(previous.id);
+      await enterNewConversation();
+      note.value = current ? "这段对话已归档。" : "这段对话已删除。";
+    } else if (!problem.value) storeProblem(previous.id, current);
+  }
   await load();
   if (
     logged.value &&
@@ -454,6 +547,19 @@ async function initialize() {
   newProblem.value = !restoringProblemId;
   if (restoringProblemId) selected.value = restoringProblemId;
   await loadProblems();
+  if (
+    restoringProblemId &&
+    !problems.value.some((item) => item.id === restoringProblemId)
+  ) {
+    const restored = await readProblem(restoringProblemId);
+    if (restored) storeProblem(restoringProblemId, restored);
+    else {
+      chat.discardMissingConversation(restoringProblemId);
+      discardConversationState(restoringProblemId);
+      await enterNewConversation();
+      note.value = "原对话已删除。";
+    }
+  }
   await load();
   if (
     pendingChat.value?.job &&
@@ -639,7 +745,8 @@ onUnmounted(() => {
       :busy="busy || chat.preparing.value"
       :pending="!!pendingChat"
       @new="openNewProblem"
-      @select="displayedProblem = $event"
+      @select="openConversation"
+      @change="changeConversation"
       @tool="tab = $event"
       @logout="logout"
       @modal="sidebarModal = $event"
@@ -1010,7 +1117,7 @@ onUnmounted(() => {
           v-model:text="sourceText"
           v-model:url="sourceUrl"
           @source="showSource"
-          @conversation="openSourceConversation"
+          @conversation="openConversation"
           @remove="(id) => remove(`/sources/${id}`)"
           @reanalyze="reanalyze"
           @sync="(id) => act(() => job(`/topics/${id}/sync`, {}))"
