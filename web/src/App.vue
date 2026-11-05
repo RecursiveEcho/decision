@@ -5,6 +5,7 @@ import {
   list,
   logout,
   request,
+  sessionId,
   setSession,
   token,
   waitJob,
@@ -14,6 +15,12 @@ import EvidencePanel from "./EvidencePanel.vue";
 import AttachmentList from "./AttachmentList.vue";
 import ChatRecords from "./ChatRecords.vue";
 import MemoryPage from "./MemoryPage.vue";
+import KnowledgeConversation from "./KnowledgeConversation.vue";
+import LibraryPage from "./LibraryPage.vue";
+import {
+  readKnowledgeOperations,
+  saveKnowledgeOperations,
+} from "./knowledgeStorage";
 import { useMemoryOverview } from "./memoryOverview";
 import {
   ArrowUp,
@@ -30,6 +37,7 @@ import { useChatFlow } from "./chatFlow";
 import type {
   Evidence,
   Decision,
+  ConversationChange,
   Job,
   Memory,
   Message,
@@ -45,6 +53,7 @@ const logged = ref(!!token()),
   note = ref(""),
   mock = ref(false);
 const sidebar = ref<InstanceType<typeof AppSidebar> | null>(null);
+const libraryPage = ref<InstanceType<typeof LibraryPage> | null>(null);
 const sidebarCollapsed = ref(false);
 const sidebarModal = ref(false);
 const composing = ref(false);
@@ -75,9 +84,43 @@ const problem = computed(() =>
     : problems.value.find((p) => p.id === selected.value),
 );
 const knowledgeProblemId = computed(() => problem.value?.id || "");
-function openSourceConversation(id: string) {
+function storeProblem(id: string, updated: Problem | null) {
+  const index = problems.value.findIndex((item) => item.id === id);
+  if (index >= 0)
+    problems.value.splice(index, 1, ...(updated ? [updated] : []));
+  else if (updated) problems.value.unshift(updated);
+}
+async function readProblem(id: string) {
+  try {
+    return await request<Problem>(`/problems/${encodeURIComponent(id)}`);
+  } catch (failure) {
+    if (failure instanceof ApiError && failure.status === 404) return null;
+    throw failure;
+  }
+}
+async function openConversation(id: string) {
   if (!id || busy.value || pendingChat.value) return;
-  displayedProblem.value = id;
+  await act(async () => {
+    const item = await readProblem(id);
+    if (!item) {
+      storeProblem(id, null);
+      const inLibrary = tab.value === "资料与主题";
+      if (selected.value === id) {
+        selected.value = "";
+        newProblem.value = true;
+        await nextTick();
+        await load();
+      }
+      discardConversationState(id);
+      throw new Error(
+        inLibrary ? "原对话已删除，仍可在这里查看资料。" : "这段对话已删除。",
+      );
+    }
+    storeProblem(id, item);
+    displayedProblem.value = id;
+    await nextTick();
+    await load();
+  });
 }
 const messages = ref<Message[]>([]),
   sources = ref<Source[]>([]),
@@ -265,6 +308,10 @@ watch(chatDraft, () => void nextTick(resizeComposer));
 watch(composerInput, () => void nextTick(resizeComposer));
 async function openNewProblem() {
   if (busy.value || pendingChat.value) return;
+  await enterNewConversation();
+}
+async function enterNewConversation() {
+  selected.value = "";
   newProblem.value = true;
   tab.value = "讨论";
   editingGoal.value = false;
@@ -279,6 +326,11 @@ async function editOriginal() {
   chat.editOriginal();
   await nextTick();
   composerInput.value?.focus();
+}
+async function continueKnowledgeDiscussion() {
+  await nextTick();
+  composerInput.value?.focus({ preventScroll: true });
+  composer.value?.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 async function leaveConversation() {
   chat.leaveFinished();
@@ -361,16 +413,75 @@ function clearData() {
   topics.value = [];
 }
 async function loadProblems() {
-  problems.value = await list<Problem>("/problems");
-  if (
-    !pendingChat.value?.problemId &&
-    !problems.value.some((p) => p.id === selected.value)
-  )
-    selected.value = problems.value[0]?.id || "";
+  const [recent, archived] = await Promise.all([
+    list<Problem>("/problems"),
+    list<Problem>("/problems?status=archived"),
+  ]);
+  problems.value = [
+    ...recent,
+    ...archived.filter((item) => item.status === "archived"),
+  ];
+}
+function discardConversationState(id: string) {
+  chat.discardDraft(id);
+  const owner = sessionId();
+  const operations = readKnowledgeOperations(owner);
+  if (operations.delete(id)) saveKnowledgeOperations(owner, operations);
+}
+async function changeConversation(id: string, change: ConversationChange) {
+  if (busy.value || pendingChat.value || chat.preparing.value) return;
+  await act(async () => {
+    const path = `/problems/${encodeURIComponent(id)}`;
+    let updated: Problem | null = null;
+    try {
+      if (change === "delete") await request(path, "DELETE");
+      else updated = await request<Problem>(path, "PATCH", change);
+    } catch (failure) {
+      if (!(failure instanceof ApiError && failure.status === 404))
+        throw failure;
+    }
+    storeProblem(id, updated);
+    if (
+      !updated ||
+      (typeof change === "object" &&
+        "status" in change &&
+        change.status === "archived")
+    ) {
+      if (selected.value === id) await enterNewConversation();
+      discardConversationState(id);
+    }
+    if (!updated && change !== "delete") throw new Error("这段对话已删除。");
+    await loadProblems();
+  });
 }
 async function refresh() {
+  const currentLibrary = libraryPage.value;
+  const previous = problem.value;
   await loadProblems();
+  if (previous && selected.value === previous.id) {
+    const current =
+      problems.value.find((item) => item.id === previous.id) ||
+      (await readProblem(previous.id));
+    if (
+      !current ||
+      (previous.status !== "archived" &&
+        current.status === "archived" &&
+        !pendingChat.value)
+    ) {
+      if (!current) chat.discardMissingConversation(previous.id);
+      discardConversationState(previous.id);
+      await enterNewConversation();
+      note.value = current ? "这段对话已归档。" : "这段对话已删除。";
+    } else if (!problem.value) storeProblem(previous.id, current);
+  }
   await load();
+  if (
+    logged.value &&
+    tab.value === "资料与主题" &&
+    currentLibrary &&
+    currentLibrary === libraryPage.value
+  )
+    await currentLibrary.refresh();
 }
 async function load() {
   const g = ++generation,
@@ -387,12 +498,9 @@ async function load() {
     return;
   }
   if (section === "资料与主题") {
-    const q = knowledgeProblemId.value
-      ? `?problemId=${encodeURIComponent(knowledgeProblemId.value)}`
-      : "";
     const [s, t] = await Promise.all([
-      list<Source>("/sources" + q),
-      list<Topic>("/topics" + q),
+      list<Source>("/sources"),
+      list<Topic>("/topics"),
     ]);
     assign(sources, s);
     assign(topics, t);
@@ -431,10 +539,27 @@ async function login() {
 async function initialize() {
   chat.restore();
   tab.value = "讨论";
-  newProblem.value = !pendingChat.value?.problemId;
-  if (pendingChat.value?.problemId)
-    selected.value = pendingChat.value.problemId;
+  const restoringKnowledgeId = [
+    ...readKnowledgeOperations(sessionId()).keys(),
+  ].at(-1);
+  const restoringProblemId =
+    pendingChat.value?.problemId || restoringKnowledgeId;
+  newProblem.value = !restoringProblemId;
+  if (restoringProblemId) selected.value = restoringProblemId;
   await loadProblems();
+  if (
+    restoringProblemId &&
+    !problems.value.some((item) => item.id === restoringProblemId)
+  ) {
+    const restored = await readProblem(restoringProblemId);
+    if (restored) storeProblem(restoringProblemId, restored);
+    else {
+      chat.discardMissingConversation(restoringProblemId);
+      discardConversationState(restoringProblemId);
+      await enterNewConversation();
+      note.value = "原对话已删除。";
+    }
+  }
   await load();
   if (
     pendingChat.value?.job &&
@@ -620,7 +745,8 @@ onUnmounted(() => {
       :busy="busy || chat.preparing.value"
       :pending="!!pendingChat"
       @new="openNewProblem"
-      @select="displayedProblem = $event"
+      @select="openConversation"
+      @change="changeConversation"
       @tool="tab = $event"
       @logout="logout"
       @modal="sidebarModal = $event"
@@ -632,7 +758,11 @@ onUnmounted(() => {
       @pointerdown="scrollInteraction++"
       @keydown="scrollInteraction++"
       :inert="sidebarModal"
-      :class="{ 'chat-page': tab === '讨论', 'empty-chat': emptyConversation }"
+      :class="{
+        'chat-page': tab === '讨论',
+        'empty-chat': emptyConversation,
+        'library-page': tab === '资料与主题',
+      }"
     >
       <header class="page-header">
         <button
@@ -817,6 +947,14 @@ onUnmounted(() => {
               先聊别的
             </button>
           </div>
+          <KnowledgeConversation
+            v-if="!newProblem && problem && messages.length"
+            :problem-id="problem.id"
+            :disabled="busy || !!pendingChat || chat.preparing.value"
+            @source="showSource"
+            @discuss="continueKnowledgeDiscussion"
+            @library="tab = '资料与主题'"
+          />
           <div class="composer-dock">
             <form
               ref="composer"
@@ -966,103 +1104,25 @@ onUnmounted(() => {
             <p class="composer-footnote">建议供你判断，决定由你确认。</p>
           </div>
         </template>
-        <template v-else-if="tab === '资料与主题'">
-          <p v-if="!knowledgeProblemId" class="muted">
-            全部资料 · 来自各个对话
-          </p>
-          <p v-else class="muted">当前对话：{{ problem?.title }}</p>
-          <form v-if="knowledgeProblemId" class="card" @submit.prevent="ingest">
-            <h2>添加资料</h2>
-            <label>标题（可选）<input v-model="sourceTitle" /></label
-            ><label
-              >文章链接<input
-                v-model="sourceUrl"
-                type="url"
-                placeholder="https://…" /></label
-            ><label
-              >或粘贴正文<textarea
-                v-model="sourceText"
-                placeholder="链接无法读取时，可以粘贴正文；同时提供时优先保存正文。"
-              /></label
-            ><button
-              :disabled="busy || (!sourceText.trim() && !sourceUrl.trim())"
-            >
-              保存并整理资料
-            </button>
-          </form>
-          <h2>来源 · {{ sources.length }}</h2>
-          <p v-if="!sources.length" class="muted">还没有资料。</p>
-          <article v-for="s in sources" :key="s.id" class="card">
-            <h3>{{ s.title }}</h3>
-            <p>{{ label(s.status) }} · {{ date(s.capturedAt) }}</p>
-            <button
-              v-if="!knowledgeProblemId && s.problemId"
-              class="secondary"
-              :disabled="busy || !!pendingChat"
-              @click="openSourceConversation(s.problemId)"
-            >
-              打开原对话
-            </button>
-            <button
-              class="secondary"
-              :disabled="busy"
-              @click="showSource(s.id)"
-            >
-              查看原文
-            </button>
-            <button
-              v-if="knowledgeProblemId"
-              class="danger"
-              :disabled="busy"
-              @click="remove(`/sources/${s.id}`)"
-            >
-              删除
-            </button>
-          </article>
-          <h2>知识主题</h2>
-          <div v-if="knowledgeProblemId && sources.length" class="card">
-            <p>
-              摘要未完成或资料、记忆有变化时，可重新分析已有资料，无需重复上传。Wiki
-              同步仅负责把已有主题写入 Wiki。
-            </p>
-            <button :disabled="busy" @click="reanalyze">重新分析资料</button>
-          </div>
-          <p v-if="!topics.length" class="muted">暂无主题，等待资料处理。</p>
-          <article v-for="t in topics" :key="t.id" class="card">
-            <h3>{{ t.title }}</h3>
-            <button
-              v-if="!knowledgeProblemId && t.problemId"
-              class="secondary"
-              :disabled="busy || !!pendingChat"
-              @click="openSourceConversation(t.problemId)"
-            >
-              打开原对话
-            </button>
-            <p class="pre">{{ t.markdown }}</p>
-            <p>Wiki：{{ label(t.syncStatus) }}</p>
-            <a
-              v-if="safeUrl(t.wikiUrl)"
-              :href="safeUrl(t.wikiUrl)"
-              target="_blank"
-              rel="noopener noreferrer"
-              >查看 Wiki</a
-            >
-            <button
-              v-if="knowledgeProblemId"
-              class="secondary"
-              :disabled="busy"
-              @click="act(() => job(`/topics/${t.id}/sync`, {}))"
-            >
-              同步 Wiki
-            </button>
-            <EvidencePanel
-              :evidence="t.evidence"
-              :sources="sources"
-              :busy="busy"
-              @open="showSource"
-            />
-          </article>
-        </template>
+        <LibraryPage
+          ref="libraryPage"
+          v-else-if="tab === '资料与主题'"
+          :sources="sources"
+          :topics="topics"
+          :problems="problems"
+          :context-id="knowledgeProblemId"
+          :busy="busy"
+          :can-navigate="!busy && !pendingChat"
+          v-model:title="sourceTitle"
+          v-model:text="sourceText"
+          v-model:url="sourceUrl"
+          @source="showSource"
+          @conversation="openConversation"
+          @remove="(id) => remove(`/sources/${id}`)"
+          @reanalyze="reanalyze"
+          @sync="(id) => act(() => job(`/topics/${id}/sync`, {}))"
+          @ingest="ingest"
+        />
         <MemoryPage
           v-else-if="tab === '记忆'"
           :memories="memories"

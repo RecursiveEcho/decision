@@ -3,7 +3,12 @@ export interface Evidence {
   quote: string;
   relation: string;
 }
+export type ConversationChange =
+  | { title: string }
+  | { status: "active" | "archived" }
+  | "delete";
 export interface Problem {
+  status?: "active" | "archived";
   id: string;
   title: string;
   goal: string;
@@ -95,6 +100,7 @@ export interface Topic {
   syncStatus: string;
   wikiUrl: string | null;
   evidence: Evidence[];
+  updatedAt?: string;
 }
 export interface Discussion {
   id: string;
@@ -132,9 +138,61 @@ export interface Device {
 }
 export interface Job {
   id: string;
+  kind?: string;
   status: string;
   mode: string;
-  error: { message: string } | null;
+  result?: { proposalId?: string } | null;
+  error: { message: string; code?: string; retryable?: boolean } | null;
+}
+export interface KnowledgeRef {
+  kind: "message" | "source";
+  id: string;
+  quote: string;
+  role?: "user" | "assistant";
+}
+export interface KnowledgeEntry {
+  id: string;
+  problemId: string;
+  title: string;
+  markdown: string;
+  domains: string[];
+  relatedEntryIds: string[];
+  refs: KnowledgeRef[];
+  revision: number;
+  proposalId: string;
+  coverage: KnowledgeCoverage;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface KnowledgeCoverage {
+  messagesTotal: number;
+  messagesConsidered: number;
+  sourcesTotal: number;
+  sourcesConsidered: number;
+  knowledgeTotal: number;
+  knowledgeConsidered: number;
+  truncated: boolean;
+  attachmentsIncluded: false;
+  notice: string;
+}
+export interface KnowledgeProposal {
+  id: string;
+  problemId: string;
+  status: "pending" | "accepted" | "dismissed";
+  action: "create" | "merge" | "revise" | "skip";
+  title: string;
+  markdown: string;
+  domains: string[];
+  relatedEntryIds: string[];
+  refs: KnowledgeRef[];
+  reason: string;
+  targetEntryId: string | null;
+  targetRevision: number | null;
+  contextFingerprint: string;
+  coverage: KnowledgeCoverage;
+  entryId?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 export interface Status {
   model: { configured: boolean; lastCallStatus: string };

@@ -5,7 +5,7 @@
 本节为已授权新增范围；独立于旧 Topic/Wiki，旧自动摘要不得修改正式知识。详细目标及验收见 KNOWLEDGE.md。
 
 - `KnowledgeRef={kind:"message"|"source",id,quote,role?:"user"|"assistant"}`。id须为本次真实提供的记录，quote为实际提供正文的连续片段（最多500字）；message保留角色。助手话语是讨论记录，不是外部事实证明。附件不冒充 source 引用；首版不直接导出/引用附件原件，coverage 明示此范围。
-- `KnowledgeEntry={id,problemId,title,markdown,domains:string[],relatedEntryIds:string[],refs:KnowledgeRef[],revision,proposalId,createdAt,updatedAt}`。正式知识仅本人确认提案可新建/更新；标题≤160字、正文≤16000字、领域最多4个（每个≤40字）、相关条目最多8个且必须存在；没有合理领域可用“待归类”。不把目录名交给模型。
+- `KnowledgeEntry={id,problemId,title,markdown,domains:string[],relatedEntryIds:string[],refs:KnowledgeRef[],coverage,revision,proposalId,createdAt,updatedAt}`。coverage从本人确认的提案复制并随历史保留。正式知识仅本人确认提案可新建/更新；标题≤160字、正文≤16000字、领域最多4个（每个≤40字）、相关条目最多8个且必须存在；没有合理领域可用“待归类”。不把目录名交给模型。
 - `KnowledgeProposal={id,problemId,status:"pending"|"accepted"|"dismissed",action:"create"|"merge"|"revise"|"skip",title,markdown,domains,relatedEntryIds,refs,reason,targetEntryId:null|string,targetRevision:null|number,contextFingerprint,coverage,createdAt,updatedAt,entryId?:string}`。merge/revise 的正文是完整拟保存的新版本，UI可同时回看旧版；保留条件差异/未决争议。skip 不建立正式知识。提案持久化后不可由客户端传正文修改，继续讨论后重新生成。
 - `coverage={messagesTotal,messagesConsidered,sourcesTotal,sourcesConsidered,knowledgeTotal,knowledgeConsidered,truncated:boolean,attachmentsIncluded:false,notice:string}`。对照是有界检索，不宣称全量读完；正文裁剪和附件范围须可见。不静默使用已撤销来源/已更正旧消息。
 - `POST /problems/{id}/knowledge-proposals`，`{}`，owner+幂等键，202 `Job(kind="knowledge_proposal")`；任务成功`result={proposalId}`。同快照在途去重，失败后可以明确重新整理。模型调用锁外，写入前复核快照。提案与原始对话均不因失败而丢失。
@@ -176,3 +176,11 @@ A 至少建立 problems、sources、messages、jobs、memories（含 revision hi
 - 指纹涵盖范围内全部eligible的内容、id/revision/scope/problem/status及模型、模式、摘要提示/结构版本。独立memory_overview Job使用现有存储作为派生缓存，调用模型在锁外（30s、有限输出、off），提交前重算指纹；旧结果不返回。`GET /jobs/{id}`不返回overview items，仅状态/指纹等元信息。摘要不写回原记忆、不改变聊天记忆事实。
 - 前端生成/轮询不阻挡导航，离页/退出/新请求防迟到覆盖。纠正、忘记后立即隐藏旧概览并重新获取；失败仍可查看全部记录及显式重试。摘要结果复用，不每次开页重复收费。
 - 资料图标在新对话状态也可打开：无上下文时用现有全局sources/topics列表，不偷用旧selected问题；添加、重分析、同步写入必须有明确原对话上下文。资料按自己的problemId可打开原对话，来回浏览保留新对话草稿/附件/档位。Wiki写作与知识库维护流程留待与用户后续讨论。
+
+## 2026-11-05 对话管理
+
+- 历史问题默认状态为 active。GET /problems 默认只列 active，status=archived 列归档，分页、排序和游标在筛选后的集合上计算。无效 status 返回 400。归档页可以恢复，普通对话入口和旧链接可打开已归档对话。
+- GET /problems/{id} 取单条活动或已归档对话；已删除返回 404，供旧链接及资料入口核对状态。
+- PATCH /problems/{id} 使用已有鉴权和字段验证，可更新 title 或 status。status 仅接受 active/archived，返回更新后的 Problem。改名后不被自动命名覆盖。归档/恢复保留消息、附件和既有资料。
+- DELETE /problems/{id} 需登录，成功 204。对话及其消息从正常列表和直接访问中消失，重复删除 404。进行中/待执行的该对话任务不能在删除后重新生成可见对话或消息。独立资料、记忆、已确认知识保留，原对话已删除时其入口给出明确提示。其他对话与全局内容不受影响。
+- 前端每条对话的菜单提供改名、归档或恢复、删除。删除确认写出当前标题；取消不发请求。删除或归档当前对话后进入新对话，清理指向该对话的本机草稿/附件。刷新后列表状态从服务端恢复，不把旧选中偷偷重新展示。仅使用合成对话验证写操作。
