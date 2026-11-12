@@ -65,3 +65,10 @@
 - 运行时资源再次审计通过；更新后的签名可执行文件与原资源清单逐字节匹配，独立应用包深层签名校验通过。最终启动页已目视确认 Wiki、数据库、核心、知识镜像均可用，模型单独显示未配置；正常业务登录入口通过。
 
 本轮证据在忽略的 `.local/desktop/acceptance-round2/`，主要包括 `baseline.txt`、`network-final.log`、`ui-upload-result.json`、`runtime-audit.log`、`final-build.log`。窗口事件位于 Preview 用户日志目录的 `desktop.log`。
+
+
+## 2026-11-12 输入区内层描边
+
+用户截图要求移除 composer 内层矩形黑框，独立只读审查通过。B 在既有 web worktree 提交 `7863b87`，E 集成为 `dc35789`：增加 `.composer textarea:focus-visible { outline: none; }`，覆盖后加载的全局焦点样式，保留外层 `focus-within` 圆角反馈及其他控件焦点提示。Vue 类型检查与 Vite 构建通过。
+
+已重新打包并更新交付目录的 Decision Preview.app，深层严格签名校验通过。更新采用预签名候选目录替换，保留当前运行会话与旧哈希资源，未退出、刷新或写入用户业务数据；当前服务返回新 CSS 为 HTTP 200，字节与交付包一致。旧包保存在忽略的 `.local/desktop/*bundle-backup` 供回退。窗口工具报 `cgWindowNotFound` 且盘点超时，本轮未声称完成 WKWebView 聚焦目视；用户在现有窗口按 Cmd-R 后加载新样式。
