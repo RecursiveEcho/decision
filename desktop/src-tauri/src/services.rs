@@ -129,7 +129,7 @@ impl Services {
             status(shared, "Wiki", "可用");
         }
         status(shared, "核心", "正在启动");
-        all.start_java()?;
+        all.start_java(shared)?;
         status(shared, "核心", "可用");
         all.config.phase = "ready".into();
         all.config.save(&all.data)?;
@@ -276,12 +276,17 @@ impl Services {
         Ok(())
     }
 
-    fn start_java(&mut self) -> Result<()> {
+    fn start_java(&mut self, shared: &Shared) -> Result<()> {
         let args = vec![self.bin("java/bin/java"), format!("-Djava.io.tmpdir={}", string(&self.data.join("temp"))),
             format!("-Dloader.path={}", self.bin("decision-desktop.jar")), "-cp".into(),
             self.bin("decision-backend.jar"), "org.springframework.boot.loader.launch.PropertiesLauncher".into()];
         let base = format!("http://127.0.0.1:{}", self.config.wiki_port);
         let model_key = storage::model_key(&self.config.installation)?;
+        status(shared, "模型", if model_key.is_empty() {
+            "未配置，请在下方填写 DeepSeek API Key"
+        } else {
+            "已配置，实际调用结果见对话"
+        });
         let static_root = reqwest::Url::from_directory_path(self.runtime.join("web"))
             .map_err(|_| "无法解析前端资源目录")?.to_string();
         let env = [
@@ -343,10 +348,11 @@ impl Services {
             status(shared, "核心", "正在恢复，中断任务可在对话中重试");
             std::thread::sleep(Duration::from_secs(2u64.pow(self.restarts.into())));
             self.java.take();
-            self.start_java()?;
+            self.start_java(shared)?;
             status(shared, "核心", "可用");
         }
         if self.ready() {
+            if self.health_failures > 0 { status(shared, "核心", "可用"); }
             self.health_failures = 0;
         } else {
             self.health_failures += 1;

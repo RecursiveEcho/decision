@@ -2,7 +2,7 @@
 
 ## 2026-11-12 原生桌面 Preview
 
-用户已授权按 11 月 9 日桌面方案执行阶段 1–4，独立只读子 Agent 审查通过。当前开发分支为 `codex/decision-desktop`，基线 `da7fcdf`。架构与验收见 `docs/desktop/PLAN.md`，实际进度见 `docs/desktop/PROGRESS.md`。独立 Preview 包、固定运行时链路和生命周期检查已通过，WKWebView 专项及干净机器仍有验收缺项。阶段 5 正式数据切换仍单独确认。原工程未跟踪的可行性报告仍在原工作区。
+用户已授权按 11 月 9 日桌面方案执行阶段 1–4，独立只读子 Agent 审查通过。当前开发分支为 `codex/decision-desktop`，基线 `da7fcdf`。架构与验收见 `docs/desktop/PLAN.md`，实际进度见 `docs/desktop/PROGRESS.md`。独立 Preview 包、固定运行时链路和生命周期检查已通过，WKWebView 文件选择、粘贴、IndexedDB、上传下载、外链、关窗重开及账号隔离已完成；拖放手势由用户协助并确认接收。真实模型、整机休眠和干净机器仍有环境验收缺项，最终包的启动状态、模型配置提示与登录入口已目视核对。阶段 5 正式数据切换仍单独确认。原工程未跟踪的可行性报告仍在原工作区。
 
 
 <!-- DECISION-HANDOFF-BEGIN DECISION-CLOUD-20261105 -->

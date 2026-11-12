@@ -157,7 +157,7 @@ class Sandbox:
         token = initialize_wiki(client, "desktop-fixture@example.test", secrets.token_hex(20))
         return client, token
 
-    def start_java(self, db_password, owner_code, wiki_client, wiki_token):
+    def start_java(self, db_password, owner_code, wiki_client, wiki_token, *, model_env=None):
         key = secrets.token_hex(32)
         self.challenge_key = key
         process = self.launch(
@@ -178,6 +178,7 @@ class Sandbox:
                 "DATABASE_USER": "decision_app", "DATABASE_PASSWORD": db_password,
                 "WIKI_BASE_URL": wiki_client.base, "WIKI_PUBLIC_URL": wiki_client.base,
                 "WIKI_ACCESS_TOKEN": wiki_token, "WIKI_LOCALE": "en",
+                **(model_env or {}),
             },
         )
         client = Client(f"http://127.0.0.1:{self.api}/api/v1", owner_code)

@@ -4,10 +4,23 @@ mod storage;
 
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::sync::{mpsc, Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow};
+
+fn trace_window(app: &AppHandle, event: &str) {
+    let Ok(directory) = app.path().app_log_dir() else { return };
+    let _ = std::fs::create_dir_all(&directory);
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).mode(0o600)
+        .open(directory.join("desktop.log")) else { return };
+    let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default().as_secs();
+    let _ = writeln!(file, "{time} pid={} {event}", std::process::id());
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -101,6 +114,8 @@ fn open_window(app: &AppHandle, shared: &Shared) -> Result<(), String> {
     let downloads = app.path().download_dir().map_err(|_| "无法读取下载目录。")?;
     tauri::WebviewWindowBuilder::new(app, "business", WebviewUrl::External(address))
         .title("Decision Preview · 隔离试用").inner_size(1180.0, 800.0).min_inner_size(420.0, 520.0)
+        // Vue consumes HTML file drag/drop events and performs its own validation.
+        .disable_drag_drop_handler()
         .on_navigation(move |url| {
             if url.origin() == allowed.origin() { return true; }
             if matches!(url.scheme(), "http" | "https") {
@@ -237,6 +252,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             let shared = app.state::<Shared>();
             show(app, if shared.0.lock().unwrap().ready { "business" } else { "startup" });
+            trace_window(app, "second_instance_reopened");
         }))
         .manage(shared.clone())
         .invoke_handler(tauri::generate_handler![desktop_status, retry_start, owner_code, save_model_key, open_business, open_logs])
@@ -250,7 +266,9 @@ fn main() {
                 &PredefinedMenuItem::cut(app, None)?, &PredefinedMenuItem::copy(app, None)?,
                 &PredefinedMenuItem::paste(app, None)?, &PredefinedMenuItem::select_all(app, None)?,
             ])?;
-            app.set_menu(Menu::with_items(app, &[&submenu, &edit])?)?;
+            let reload = MenuItem::with_id(app, "reload", "重新载入页面", true, Some("CmdOrCtrl+R"))?;
+            let view = Submenu::with_items(app, "显示", true, &[&reload])?;
+            app.set_menu(Menu::with_items(app, &[&submenu, &edit, &view])?)?;
             let handle = app.handle().clone();
             std::thread::spawn(move || worker(handle, managed, receiver));
             app.state::<Shared>().1.send(Action::Start)?;
@@ -258,11 +276,19 @@ fn main() {
         })
         .on_menu_event(|app, event| {
             if event.id().as_ref() == "settings" { show(app, "startup"); }
+            if event.id().as_ref() == "reload" {
+                if let Some(window) = app.get_webview_window("business") {
+                    if window.reload().is_ok() { trace_window(app, "business_reloaded"); }
+                }
+            }
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let _ = window.hide();
+                if window.hide().is_ok() {
+                    trace_window(window.app_handle(), &format!("window_hidden label={} visible={}",
+                        window.label(), window.is_visible().unwrap_or(true)));
+                }
             }
         })
         .build(tauri::generate_context!())
@@ -277,6 +303,7 @@ fn main() {
         }
         tauri::RunEvent::Reopen { .. } => {
             show(app, if shared.0.lock().unwrap().ready { "business" } else { "startup" });
+            trace_window(app, "application_reopened");
         }
         _ => {}
     });
