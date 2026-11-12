@@ -6,6 +6,7 @@ import argparse
 import datetime as dt
 import fcntl
 import hashlib
+import hmac
 import ipaddress
 import json
 import os
@@ -371,7 +372,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class Client:
-    def __init__(self, base, access_code):
+    def __init__(self, base, access_code, *, identity_key=None):
         parsed = urllib.parse.urlsplit(base)
         try:
             loopback = ipaddress.ip_address(parsed.hostname).is_loopback
@@ -382,9 +383,26 @@ class Client:
         self.base = base.rstrip('/')
         self.access_code = access_code
         self.token = ''
+        self.identity_origin = f'{parsed.scheme}://{parsed.netloc}'
+        self.identity_key = bytes.fromhex(identity_key) if identity_key else None
+        if self.identity_key is not None and len(self.identity_key) != 32:
+            raise SyncError('本机服务身份配置无效。')
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
+    def verify_identity(self):
+        if self.identity_key is None:
+            return
+        challenge = secrets.token_hex(32)
+        request = urllib.request.Request(self.identity_origin + '/_desktop/ready',
+                                         headers={'X-Decision-Challenge': challenge})
+        with self.opener.open(request, timeout=3) as response:
+            proof = response.read(128).decode('ascii')
+        expected = hmac.new(self.identity_key, challenge.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(proof, expected):
+            raise SyncError('本机服务身份验证失败，已停止发送认证。')
+
     def request(self, path, data=None):
+        self.verify_identity()
         headers = {'Accept': 'application/json', 'Cache-Control': 'no-store'}
         if self.token:
             headers['Authorization'] = 'Bearer ' + self.token
@@ -423,9 +441,9 @@ def settings(vault=None, api_base=None):
     return vault, Client(base, code)
 
 
-def status_update(value):
-    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
-    atomic_write(STATE / 'status.json', json_bytes(value))
+def status_update(value, state_dir):
+    state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    atomic_write(state_dir / 'status.json', json_bytes(value))
 
 
 def once(vault=None, api_base=None):
@@ -434,9 +452,10 @@ def once(vault=None, api_base=None):
     return dict(result, vault=str(vault), lastSuccessAt=now())
 
 
-def watch(vault=None, api_base=None, interval=10):
-    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
-    lock = safe_path(STATE / 'process.lock').open('a')
+def watch(vault=None, api_base=None, interval=10, *, client=None, state_dir=None):
+    state_dir = STATE if state_dir is None else safe_path(state_dir)
+    state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    lock = safe_path(state_dir / 'process.lock').open('a')
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -444,13 +463,14 @@ def watch(vault=None, api_base=None, interval=10):
     generation = secrets.token_hex(16)
     state = {'running': True, 'pid': os.getpid(), 'generation': generation,
              'status': 'starting', 'lastSuccessAt': None, 'error': None}
-    status_update(state)
+    status_update(state, state_dir)
     failures = 0
     try:
-        vault, client = settings(vault, api_base)
+        if client is None:
+            vault, client = settings(vault, api_base)
         state['vault'] = str(vault)
         while True:
-            command = read_json(STATE / 'stop.json', {})
+            command = read_json(state_dir / 'stop.json', {})
             if command.get('generation') == generation:
                 break
             try:
@@ -462,15 +482,15 @@ def watch(vault=None, api_base=None, interval=10):
                 # HTTP/transport messages can contain private server responses; keep them out of logs/state.
                 message = str(error) if isinstance(error, SyncError) else '本机服务暂不可用；同步将自动重试，原文件保留。'
                 state.update(status='failed', error=message)
-            status_update(state)
+            status_update(state, state_dir)
             deadline = time.monotonic() + min(60, max(interval, 2 ** min(failures, 5)))
             while time.monotonic() < deadline:
-                if read_json(STATE / 'stop.json', {}).get('generation') == generation:
+                if read_json(state_dir / 'stop.json', {}).get('generation') == generation:
                     return
                 time.sleep(min(1, max(0, deadline - time.monotonic())))
     finally:
         state.update(running=False, status='stopped')
-        status_update(state)
+        status_update(state, state_dir)
         lock.close()
 
 

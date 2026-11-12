@@ -1,0 +1,27 @@
+{
+  "postgres": {
+    "version": "Postgres.app 2.9.6 (PostgreSQL 16)",
+    "url": "https://github.com/PostgresApp/PostgresApp/releases/download/v2.9.6/Postgres-2.9.6-16.dmg",
+    "sha256": "2689dc64d6a02e0a66e4585616919060d8fbf5bb06886fccc05b7f87638bf081"
+  },
+  "wiki": {
+    "version": "2.5.314",
+    "url": "https://github.com/requarks/wiki/releases/download/v2.5.314/wiki-js.tar.gz",
+    "sha256": "7a37337ac499fb3fcd168b53b136ba8a79b3c819db1850c273db67974320fdb7"
+  },
+  "java": {
+    "version": "17.0.21+9",
+    "url": "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jre_aarch64_mac_hotspot_17.0.21_9.tar.gz",
+    "sha256": "a5ab5bacd6e719d5a5570580ed14dceb2ed532208a39af927906b9742da1745e"
+  },
+  "python": {
+    "version": "3.12.16+20261110",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.12.16%2B20261110-aarch64-apple-darwin-install_only.tar.gz",
+    "sha256": "e956e60bc9465d577ef8062059aa05cd3a2665b4b8678a2ed24e432368330b8f"
+  },
+  "node": {
+    "version": "22.23.4",
+    "url": "https://nodejs.org/dist/v22.23.4/node-v22.23.4-darwin-arm64.tar.gz",
+    "sha256": "c9e1dbc748b33ed2d14f42445191ecaf14c56259c7a9a26d0042c49ec2b66428"
+  }
+}

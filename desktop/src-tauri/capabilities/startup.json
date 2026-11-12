@@ -1,0 +1,6 @@
+{
+  "identifier": "startup",
+  "description": "Local startup window. The business webview has no native command capability.",
+  "windows": ["startup"],
+  "permissions": ["core:default"]
+}

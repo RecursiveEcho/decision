@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Decision Preview</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="app.js"></script>
+</head>
+<body>
+<main>
+  <h1>Decision Preview</h1>
+  <p>桌面隔离试用环境</p>
+  <p id="status" role="status">正在启动本机服务…</p>
+  <dl id="services"></dl>
+  <div class="actions">
+    <button id="open" hidden>打开 Decision</button>
+    <button id="retry" hidden>重试启动</button>
+    <button id="logs">打开日志目录</button>
+    <button id="code">查看管理员访问码</button>
+  </div>
+  <output id="owner-code" hidden></output>
+  <form id="settings">
+    <label for="model-key">DeepSeek API Key</label>
+    <input id="model-key" type="password" autocomplete="off" placeholder="填写后保存在本机钥匙串">
+    <button type="submit">保存，下次启动生效</button>
+    <p id="saved" role="status"></p>
+  </form>
+</main>
+</body>
+</html>

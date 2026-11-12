@@ -1,5 +1,10 @@
 # 开发交接状态
 
+## 2026-11-12 原生桌面 Preview
+
+用户已授权按 11 月 9 日桌面方案执行阶段 1–4，独立只读子 Agent 审查通过。当前开发分支为 `codex/decision-desktop`，基线 `da7fcdf`。架构与验收见 `docs/desktop/PLAN.md`，实际进度见 `docs/desktop/PROGRESS.md`。独立 Preview 包、固定运行时链路和生命周期检查已通过，WKWebView 专项及干净机器仍有验收缺项。阶段 5 正式数据切换仍单独确认。原工程未跟踪的可行性报告仍在原工作区。
+
+
 <!-- DECISION-HANDOFF-BEGIN DECISION-CLOUD-20261105 -->
 ## 云端接手入口：DECISION-CLOUD-20261105
 

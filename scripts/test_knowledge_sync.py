@@ -1,10 +1,11 @@
 """Adversarial mirror checks. Synthetic fixtures only; no network or user's vault."""
 import copy
+import io
 import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import knowledge_sync as sync
 
@@ -248,6 +249,21 @@ class MirrorTest(unittest.TestCase):
             self.assertNotRegex(Path(path).stem, r'^[0-9a-f-]{24,}$')
             for target in re.findall(r'\[\[([^]|]+)(?:\|[^]]*)?\]\]', content.decode()):
                 self.assertIn(target + '.md', files)
+
+
+class DesktopIdentityTests(unittest.TestCase):
+    def test_untrusted_service_receives_no_login_or_bearer_request(self):
+        client = sync.Client('http://127.0.0.1:12345/api/v1', 'synthetic-owner',
+                             identity_key='11' * 32)
+        client.opener = Mock()
+        client.opener.open.return_value = io.BytesIO(b'00' * 32)
+        with self.assertRaises(sync.SyncError):
+            client.export()
+        self.assertEqual(client.opener.open.call_count, 1)
+        request = client.opener.open.call_args.args[0]
+        self.assertEqual(request.full_url, 'http://127.0.0.1:12345/_desktop/ready')
+        self.assertFalse(request.has_header('Authorization'))
+        self.assertIsNone(request.data)
 
 
 if __name__ == '__main__':
