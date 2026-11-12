@@ -420,3 +420,7 @@ E合入A/B、根后端140/网页90测试及构建后，B在18088真实候选环�
 正式8088 /assets/index-CzZmDC5X.js最终Chrome只读回读：owner/admin、19历史对话、17记忆、聊天/资料图谱、刷新与390正常。唯一POST为认证，0业务写尝试/0pageerror，usage37→37（本人用量此前已变化，未归因本轮）。退出后session/chat/knowledge/overview键均null，自有窗口关闭。Network/Performance复测普通初始化ready约73/46ms、4xCPU102ms，GETme约5–13ms，/problems约8–18ms，记忆入口约75ms，无>50ms longtask。未宣称普通首屏普遍慢得到复现或全面提速，修复的是前述有在途任务恢复时的全局阻塞。脱敏前后计时仅忽略目录refresh-profile-before/after.json。初版性能脚本尚按旧登录页找访问码而超时，调整至管理员入口后复测通过，非产品认证失败。
 
 5197开发预览（会话88399）已停止；所有B自有浏览器/临时状态已清理，用户窗口未动。B无跨角色改动，正式未注册合成账号或修改本人业务记录。
+
+## 2026-11-12 输入框内层聚焦描边
+
+开始/源码完成于 2026-11-12。本轮用户截图要求移除 composer 内层矩形黑框，独立只读审查通过。根因是后加载 appearance.css 的 textarea:focus-visible 覆盖原 outline:none。在 web/src/style.css 的 composer 样式旁增加更具体的 .composer textarea:focus-visible，保留外层圆角 focus-within 和其他控件焦点提示。npm run build（类型检查及 Vite）通过；未增加低影响样式专用测试。桌面包更新及实际 WKWebView 目视由 E 集成阶段完成。
