@@ -18,6 +18,7 @@ interface MediaRow {
 const DB = "decision-chat-media";
 const STORE = "media";
 const revoked = new Set<string>();
+const clearing = new Map<string, Promise<void>>();
 const transactions = new Map<string, Set<IDBTransaction>>();
 let database: Promise<IDBDatabase> | undefined;
 const storageError = () =>
@@ -64,6 +65,7 @@ async function transact<T>(
   valid: () => boolean,
   work: (store: IDBObjectStore, result: (value: T) => void) => void,
 ): Promise<T> {
+  await clearing.get(owner);
   check(owner, valid);
   const database = await db();
   check(owner, valid);
@@ -155,26 +157,39 @@ export function clearMediaSession(owner: string): Promise<void> {
     }
   }
   if (typeof indexedDB === "undefined") return Promise.resolve();
-  return db().then(
-    (database) =>
-      new Promise<void>((resolve, reject) => {
-        const tx = database.transaction(STORE, "readwrite");
-        const cursor = tx
-          .objectStore(STORE)
-          .index("owner")
-          .openCursor(IDBKeyRange.only(owner));
-        cursor.onsuccess = () => {
-          const item = cursor.result;
-          if (item) {
-            item.delete();
-            item.continue();
-          }
-        };
-        tx.oncomplete = () => resolve();
-        tx.onerror = tx.onabort = () =>
-          reject(new Error("本机附件缓存清理失败，请清除此站点的浏览器数据。"));
-      }),
-  );
+  const cleanup = db()
+    .then(
+      (database) =>
+        new Promise<void>((resolve, reject) => {
+          const tx = database.transaction(STORE, "readwrite");
+          const cursor = tx
+            .objectStore(STORE)
+            .index("owner")
+            .openCursor(IDBKeyRange.only(owner));
+          cursor.onsuccess = () => {
+            const item = cursor.result;
+            if (item) {
+              item.delete();
+              item.continue();
+            }
+          };
+          tx.oncomplete = () => resolve();
+          tx.onerror = tx.onabort = () =>
+            reject(
+              new Error("本机附件缓存清理失败，请清除此站点的浏览器数据。"),
+            );
+        }),
+    )
+    .finally(() => {
+      clearing.delete(owner);
+    });
+  clearing.set(owner, cleanup);
+  return cleanup;
+}
+export function activateMediaSession(owner: string) {
+  const pending = clearing.get(owner);
+  if (pending) void pending.then(() => revoked.delete(owner)).catch(() => {});
+  else revoked.delete(owner);
 }
 // Only expired login sessions are swept. Other tabs' valid sessions are untouched.
 export async function purgeExpiredMedia() {

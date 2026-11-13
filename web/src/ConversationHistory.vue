@@ -7,6 +7,8 @@ import {
   Ellipsis,
   Pencil,
   Trash2,
+  Pin,
+  Folder,
 } from "@lucide/vue";
 import { sessionId } from "./api";
 import type { ConversationChange, Problem } from "./types";
@@ -15,6 +17,8 @@ const props = defineProps<{
   problems: Problem[];
   selected: string;
   disabled: boolean;
+  runs?: Record<string, string>;
+  unread?: Record<string, boolean>;
 }>();
 const emit = defineEmits<{
   select: [id: string];
@@ -22,14 +26,20 @@ const emit = defineEmits<{
 }>();
 const archived = ref(history.state?.archivedView === sessionId());
 const rows = computed(() =>
-  props.problems.filter((p) => (p.status === "archived") === archived.value),
+  [...props.problems]
+    .filter((p) => (p.status === "archived") === archived.value)
+    .sort(
+      (a, b) =>
+        Number(!!b.pinned) - Number(!!a.pinned) ||
+        (a.group || "\uffff").localeCompare(b.group || "\uffff"),
+    ),
 );
 const menu = ref("");
 const root = ref<HTMLElement>();
 const filter = ref<HTMLButtonElement>();
 const dialog = ref<HTMLDialogElement>();
 const titleInput = ref<HTMLInputElement>();
-const action = ref<"rename" | "delete">("rename");
+const action = ref<"rename" | "delete" | "group">("rename");
 const target = ref<Problem>();
 const title = ref("");
 
@@ -103,14 +113,14 @@ function onKey(event: KeyboardEvent) {
     items[destination]?.focus();
   }
 }
-async function edit(item: Problem, mode: "rename" | "delete") {
+async function edit(item: Problem, mode: "rename" | "delete" | "group") {
   action.value = mode;
   target.value = item;
-  title.value = item.title;
+  title.value = mode === "group" ? item.group || "" : item.title;
   menu.value = "";
   await nextTick();
   dialog.value?.showModal();
-  if (mode === "rename") {
+  if (mode !== "delete") {
     titleInput.value?.focus();
     titleInput.value?.select();
   }
@@ -122,10 +132,14 @@ function submit() {
   if (!target.value || props.disabled) return;
   const item = target.value;
   const change =
-    action.value === "delete" ? "delete" : { title: title.value.trim() };
-  if (change !== "delete" && !change.title) return;
+    action.value === "delete"
+      ? "delete"
+      : action.value === "group"
+        ? { group: title.value.trim() }
+        : { title: title.value.trim() };
+  if (typeof change === "object" && "title" in change && !change.title) return;
   dialog.value?.close();
-  if (change === "delete" || change.title !== item.title)
+  if (change === "delete" || "group" in change || change.title !== item.title)
     emit("change", item.id, change);
 }
 function move(item: Problem) {
@@ -183,7 +197,21 @@ onUnmounted(() => {
           :disabled="disabled"
           @click="emit('select', item.id)"
         >
-          <span>{{ item.title }}</span>
+          <Pin v-if="item.pinned" :size="12" /><span
+            >{{ item.title
+            }}<small v-if="item.group" class="conversation-group">{{
+              item.group
+            }}</small></span
+          ><span
+            v-if="runs?.[item.id]"
+            class="run-dot"
+            :title="runs[item.id]"
+            >{{ runs[item.id] }}</span
+          ><span
+            v-else-if="unread?.[item.id]"
+            class="unread-dot"
+            aria-label="有新回答"
+          />
         </button>
         <button
           :id="'actions-' + item.id"
@@ -206,6 +234,20 @@ onUnmounted(() => {
         >
           <button :disabled="disabled" @click="edit(item, 'rename')">
             <Pencil :size="17" />重命名
+          </button>
+          <button
+            :disabled="disabled"
+            @click="
+              () => {
+                menu = '';
+                emit('change', item.id, { pinned: !item.pinned });
+              }
+            "
+          >
+            <Pin :size="17" />{{ item.pinned ? "取消固定" : "固定对话" }}
+          </button>
+          <button :disabled="disabled" @click="edit(item, 'group')">
+            <Folder :size="17" />设置分组
           </button>
           <button :disabled="disabled" @click="move(item)">
             <component :is="archived ? ArchiveRestore : Archive" :size="17" />{{
@@ -230,17 +272,26 @@ onUnmounted(() => {
     >
       <form @submit.prevent="submit">
         <h2 id="history-dialog-title">
-          {{ action === "rename" ? "更改对话名称" : "删除对话" }}
+          {{
+            action === "rename"
+              ? "更改对话名称"
+              : action === "group"
+                ? "设置分组"
+                : "删除对话"
+          }}
         </h2>
-        <label v-if="action === 'rename'"
-          >对话名称<input
+        <label v-if="action !== 'delete'"
+          >{{ action === "group" ? "分组名称（留空移出分组）" : "对话名称"
+          }}<input
             ref="titleInput"
             v-model="title"
-            maxlength="300"
-            required
+            :maxlength="action === 'group' ? 60 : 300"
+            :required="action === 'rename'"
         /></label>
         <p v-else>
-          确定删除「{{ target?.title }}」及其聊天记录？此操作无法撤销。
+          确定删除「{{
+            target?.title
+          }}」及其聊天记录？此操作无法撤销。独立保存的资料、知识和记忆不会随之删除。
         </p>
         <div class="history-dialog-buttons">
           <button
@@ -255,7 +306,7 @@ onUnmounted(() => {
             :disabled="disabled || (action === 'rename' && !title.trim())"
             :class="{ danger: action === 'delete' }"
           >
-            {{ action === "rename" ? "保存" : "确认删除" }}
+            {{ action !== "delete" ? "保存" : "确认删除" }}
           </button>
         </div>
       </form>

@@ -46,12 +46,12 @@ afterEach(() => {
 });
 
 describe("recoverable chat writes", () => {
-  it("clears saved drafts when the login expires before page restoration", () => {
+  it("preserves saved drafts when the login expires before page restoration", () => {
     const { flow } = make();
     flow.setDraft("new", "过期会话的原话");
     vi.setSystemTime(Date.now() + 3600001);
     expect(token()).toBe("");
-    expect(sessionStorage.getItem(CHAT_STORAGE)).toBeNull();
+    expect(sessionStorage.getItem(CHAT_STORAGE)).toContain("过期会话的原话");
   });
   it("can leave a confirmed failed response without deleting or resending its message, but not an unknown write", async () => {
     const fetch = vi
@@ -132,10 +132,13 @@ describe("recoverable chat writes", () => {
     expect(fetch.mock.calls[2][1].body).toBe("{}");
     expect(restored.pending.value).toBeNull();
   });
-  it("stopping polling preserves a known job; reload resumes by GET only", async () => {
+  it("stopping event polling preserves a known job; reload resumes by GET only", async () => {
     const fetch = vi
       .fn()
       .mockResolvedValueOnce(json({ problem, job: job("queued") }, 202))
+      .mockResolvedValueOnce(
+        json({ items: [], nextCursor: 0, job: job("running") }),
+      )
       .mockResolvedValueOnce(json(job()));
     vi.stubGlobal("fetch", fetch);
     const { flow } = make();
@@ -143,13 +146,15 @@ describe("recoverable chat writes", () => {
     const sending = flow.send(null);
     await vi.advanceTimersByTimeAsync(1);
     flow.dispose();
-    await vi.advanceTimersByTimeAsync(2100);
+    await vi.advanceTimersByTimeAsync(500);
     await sending;
     expect(flow.pending.value?.job?.id).toBe("j1");
     const restored = make().flow;
     await restored.resume();
-    expect(fetch.mock.calls[1][0]).toBe("/api/v1/jobs/j1");
-    expect(fetch.mock.calls[1][1].method).toBe("GET");
+    expect(fetch.mock.calls[2][0]).toBe("/api/v1/jobs/j1");
+    expect(fetch.mock.calls.filter((c) => c[1].method === "POST")).toHaveLength(
+      1,
+    );
     expect(restored.pending.value).toBeNull();
   });
   it("keeps succeeded state when view refresh fails and never replays the write", async () => {
@@ -195,7 +200,7 @@ describe("recoverable chat writes", () => {
     vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
       throw new Error("quota");
     });
-    await expect(flow.send(null)).rejects.toThrow("浏览器未能暂存");
+    await expect(flow.send(null)).rejects.toThrow("未能保存本机草稿");
     expect(fetch).not.toHaveBeenCalled();
     expect(flow.pending.value?.content).toBe("必须先暂存");
   });
@@ -208,6 +213,7 @@ describe("recoverable chat writes", () => {
     const { flow, accepted } = make();
     flow.setDraft("new", "退出前原话");
     const sending = flow.send(null);
+    await vi.advanceTimersByTimeAsync(1);
     logout();
     flow.clear();
     finish(json({ problem, job: job() }, 202));

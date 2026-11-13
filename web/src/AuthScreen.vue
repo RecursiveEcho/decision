@@ -85,7 +85,7 @@ onUnmounted(() => {
 <template>
   <main class="auth-screen">
     <div class="auth-brand">
-      <span class="brand-mark" aria-hidden="true">知</span><span>知衡</span>
+      <span class="brand-mark" aria-hidden="true">D</span><span>Decision</span>
     </div>
     <section class="auth-card">
       <h1>{{ heading }}</h1>

@@ -11,8 +11,10 @@ import {
   LogOut,
   X,
   Settings,
+  Search,
 } from "@lucide/vue";
-import AppearanceSettings from "./AppearanceSettings.vue";
+import SettingsCenter from "./SettingsCenter.vue";
+import ConversationSearch from "./ConversationSearch.vue";
 import ConversationHistory from "./ConversationHistory.vue";
 import type { ConversationChange, Problem } from "./types";
 
@@ -25,9 +27,14 @@ const props = defineProps<{
   busy: boolean;
   pending: boolean;
   collapsed: boolean;
+  hasMore?: boolean;
+  runs?: Record<string, string>;
+  unread?: Record<string, boolean>;
 }>();
 const emit = defineEmits<{
   select: [id: string];
+  searchSelect: [id: string, messageId: string | null];
+  more: [];
   change: [id: string, value: ConversationChange];
   new: [];
   tool: [tab: string];
@@ -40,7 +47,8 @@ const tools = [
   { title: "资料与主题", icon: Library },
   { title: "记忆", icon: Brain },
 ];
-const settings = ref<InstanceType<typeof AppearanceSettings>>();
+const settings = ref<InstanceType<typeof SettingsCenter>>();
+const search = ref<InstanceType<typeof ConversationSearch>>();
 const isMobile = ref(false);
 const mobileOpen = ref(false);
 const sidebar = ref<HTMLElement | null>(null);
@@ -124,7 +132,11 @@ onUnmounted(() => {
   media?.removeEventListener("change", breakpoint);
   document.removeEventListener("keydown", keydown);
 });
-defineExpose({ openMenu });
+defineExpose({
+  openMenu,
+  openSettings: () => settings.value?.open(),
+  openSearch: () => search.value?.open(),
+});
 </script>
 
 <template>
@@ -146,8 +158,8 @@ defineExpose({ openMenu });
   >
     <div class="sidebar-head">
       <div class="sidebar-brand">
-        <span class="brand-mark" aria-hidden="true">知</span
-        ><span class="sidebar-wordmark">知衡</span>
+        <span class="brand-mark" aria-hidden="true">D</span
+        ><span class="sidebar-wordmark">Decision</span>
       </div>
       <button
         class="icon-button collapse-toggle"
@@ -174,7 +186,7 @@ defineExpose({ openMenu });
       class="new-chat-button"
       aria-label="新对话"
       title="新对话"
-      :disabled="busy || pending"
+      :disabled="busy"
       @click="navigate(() => emit('new'))"
     >
       <SquarePen :size="18" /><span class="sidebar-label">新对话</span>
@@ -188,13 +200,32 @@ defineExpose({ openMenu });
     >
       <History :size="19" />
     </button>
+    <button
+      class="sidebar-search-button"
+      title="搜索对话 · ⌘K"
+      aria-label="搜索对话"
+      @click="search?.open($event.currentTarget as HTMLElement)"
+    >
+      <Search :size="18" /><span class="sidebar-label">搜索对话</span
+      ><kbd>⌘K</kbd>
+    </button>
     <ConversationHistory
       :problems="problems"
+      :runs="runs"
+      :unread="unread"
       :selected="newProblem ? '' : selected"
-      :disabled="busy || pending"
+      :disabled="busy"
       @select="(id) => navigate(() => emit('select', id))"
       @change="(id, value) => navigate(() => emit('change', id, value))"
     />
+    <button
+      v-if="hasMore && !collapsed"
+      class="history-load-more"
+      :disabled="busy"
+      @click="emit('more')"
+    >
+      加载更多对话
+    </button>
     <div class="sidebar-bottom">
       <nav class="tool-rail" aria-label="工作台工具">
         <span
@@ -248,5 +279,14 @@ defineExpose({ openMenu });
       </div>
     </div>
   </aside>
-  <AppearanceSettings ref="settings" />
+  <SettingsCenter ref="settings" />
+  <ConversationSearch
+    ref="search"
+    @select="
+      (id, messageId) => {
+        closeMenu();
+        emit('searchSelect', id, messageId);
+      }
+    "
+  />
 </template>

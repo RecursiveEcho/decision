@@ -1,6 +1,10 @@
 import type { Job, AuthSession } from "./types";
 import { clearChatSession } from "./chatStorage";
-import { clearMediaSession, purgeExpiredMedia } from "./mediaStorage";
+import {
+  clearMediaSession,
+  purgeExpiredMedia,
+  activateMediaSession,
+} from "./mediaStorage";
 import { OVERVIEW_STORAGE } from "./overviewStorage";
 import { KNOWLEDGE_STORAGE } from "./knowledgeStorage";
 const SESSION = "decision.session";
@@ -18,7 +22,7 @@ export function token(): string {
   try {
     const s = JSON.parse(sessionStorage.getItem(SESSION) || "null");
     if (s && !(Date.parse(s.expiresAt) > Date.now())) {
-      logout();
+      logout(false);
       return "";
     }
     return s?.accessToken || "";
@@ -31,7 +35,7 @@ export function setSession(
     Partial<Pick<AuthSession, "account">>,
 ) {
   // Abort old responses/retries and clear mounted account state before installing new credentials.
-  logout();
+  logout(!!accountId());
   sessionStorage.setItem(
     SESSION,
     JSON.stringify({
@@ -49,13 +53,12 @@ export function setSession(
       localId: crypto.randomUUID(),
     }),
   );
+  activateMediaSession(accountId());
   void purgeExpiredMedia().catch(() => {});
 }
 function clearLocalMedia() {
   try {
-    const owner = JSON.parse(
-      sessionStorage.getItem(SESSION) || "null",
-    )?.localId;
+    const owner = accountId();
     if (owner)
       void clearMediaSession(owner).catch((error: Error) => {
         if (typeof window !== "undefined")
@@ -81,14 +84,28 @@ export function sessionId(): string {
   }
   return s.localId;
 }
-export function logout() {
+export function setSessionAccount(account: AuthSession["account"]) {
+  const current = JSON.parse(sessionStorage.getItem(SESSION) || "null");
+  if (current)
+    sessionStorage.setItem(SESSION, JSON.stringify({ ...current, account }));
+}
+export function accountId(): string {
+  try {
+    const s = JSON.parse(sessionStorage.getItem(SESSION) || "null");
+    return s?.account?.id || s?.localId || "";
+  } catch {
+    return "";
+  }
+}
+export function logout(clearDrafts = true) {
+  const owner = accountId();
   sessionStorage.removeItem(OVERVIEW_STORAGE);
   sessionStorage.removeItem(KNOWLEDGE_STORAGE);
   sessionRequests.abort();
-  clearLocalMedia();
+  if (clearDrafts) clearLocalMedia();
   sessionRequests = new AbortController();
   sessionStorage.removeItem(SESSION);
-  clearChatSession();
+  if (clearDrafts) clearChatSession(owner);
   window.dispatchEvent(new Event("session-ended"));
 }
 export const sleep = (ms: number) =>
@@ -136,7 +153,7 @@ export async function request<T>(
       response.status === 401 &&
       !["/auth/login", "/auth/register"].includes(path)
     ) {
-      logout();
+      logout(false);
       throw new ApiError("登录已过期，请重新登录。", 401);
     }
     if (!response.ok) {

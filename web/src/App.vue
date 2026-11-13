@@ -6,6 +6,8 @@ import {
   logout,
   request,
   sessionId,
+  accountId,
+  setSessionAccount,
   setSession,
   token,
   waitJob,
@@ -31,7 +33,18 @@ import {
   Paperclip,
   ChevronDown,
   Check,
+  Copy,
+  Square,
+  ArrowDown,
+  Search,
+  X,
 } from "@lucide/vue";
+import {
+  preferences,
+  loadPreferences,
+  readWorkspace,
+  writeWorkspace,
+} from "./preferences";
 import { FILE_ACCEPT } from "./attachments";
 import { renderMarkdown } from "./markdown";
 import { useChatFlow } from "./chatFlow";
@@ -104,7 +117,7 @@ async function readProblem(id: string) {
   }
 }
 async function openConversation(id: string) {
-  if (!id || busy.value || pendingChat.value) return;
+  if (!id || busy.value) return;
   const interaction = scrollInteraction;
   await act(async () => {
     const item = await readProblem(id);
@@ -127,6 +140,7 @@ async function openConversation(id: string) {
     await nextTick();
     await load();
     await nextTick();
+    restoreScroll();
     if (
       messages.value.at(-1)?.knowledgeSuggestion?.jobId &&
       interaction === scrollInteraction &&
@@ -152,14 +166,23 @@ const composer = ref<HTMLFormElement | null>(null);
 const composerInput = ref<HTMLTextAreaElement | null>(null);
 const errorBanner = ref<HTMLDivElement | null>(null);
 const chat = useChatFlow({
-  accepted(id, created) {
+  accepted(id, created, sourceTarget) {
     if (created)
       problems.value = [created, ...problems.value.filter((p) => p.id !== id)];
-    selected.value = id;
-    newProblem.value = false;
-    tab.value = "讨论";
+    if (
+      sourceTarget === draftTarget.value ||
+      (sourceTarget === "new" && newProblem.value)
+    ) {
+      selected.value = id;
+      newProblem.value = false;
+      tab.value = "讨论";
+    }
   },
-  async refresh() {
+  async refresh(id) {
+    if (id && selected.value !== id) {
+      await loadProblems();
+      return;
+    }
     const pane = mainPane.value;
     const startingInteraction = scrollInteraction;
     const follow =
@@ -176,13 +199,10 @@ const draftTarget = computed(() =>
 );
 const draftFiles = computed(() => chat.files.value[draftTarget.value] || []);
 const selectedThinking = computed(
-  () =>
-    pendingChat.value?.thinking ||
-    chat.thinking.value[draftTarget.value] ||
-    "off",
+  () => chat.thinking.value[draftTarget.value] || "off",
 );
 async function addAttachments(incoming: File[]) {
-  if (!incoming.length || busy.value || pendingChat.value) return;
+  if (!incoming.length || busy.value) return;
   const target = draftTarget.value;
   await act(() => chat.addFiles(target, incoming));
 }
@@ -195,7 +215,7 @@ function pasteAttachments(event: ClipboardEvent) {
   const files = Array.from(event.clipboardData?.files || []);
   if (!files.length) return;
   event.preventDefault();
-  if (busy.value || pendingChat.value) return;
+  if (busy.value) return;
   const text = event.clipboardData?.getData("text/plain");
   if (text) chatDraft.value += text;
   void addAttachments(files);
@@ -203,7 +223,7 @@ function pasteAttachments(event: ClipboardEvent) {
 function dragAttachments(event: DragEvent) {
   if (!event.dataTransfer?.types.includes("Files")) return;
   event.preventDefault();
-  draggingFiles.value = !busy.value && !pendingChat.value;
+  draggingFiles.value = !busy.value;
 }
 function dropAttachments(event: DragEvent) {
   if (!event.dataTransfer?.files.length) return;
@@ -306,21 +326,18 @@ function composerKeydown(event: KeyboardEvent) {
     event.shiftKey ||
     event.isComposing ||
     composing.value ||
-    event.keyCode === 229
+    event.keyCode === 229 ||
+    (preferences.sendKey === "mod-enter" && !event.metaKey && !event.ctrlKey)
   )
     return;
   event.preventDefault();
-  if (
-    !busy.value &&
-    !pendingChat.value &&
-    (chatDraft.value.trim() || draftFiles.value.length)
-  )
+  if (!busy.value && (chatDraft.value.trim() || draftFiles.value.length))
     void send();
 }
 watch(chatDraft, () => void nextTick(resizeComposer));
 watch(composerInput, () => void nextTick(resizeComposer));
 async function openNewProblem() {
-  if (busy.value || pendingChat.value) return;
+  if (busy.value) return;
   await enterNewConversation();
 }
 async function enterNewConversation() {
@@ -435,6 +452,7 @@ function ended() {
   editingGoal.value = false;
   goalDraft.value = "";
   chat.clear();
+  findOpen.value = false;
   clearData();
   sourceDetail.value = null;
   chosenSources.value = [];
@@ -449,15 +467,37 @@ function clearData() {
   decisions.value = [];
   topics.value = [];
 }
-async function loadProblems() {
-  const [recent, archived] = await Promise.all([
-    list<Problem>("/problems"),
-    list<Problem>("/problems?status=archived"),
-  ]);
+const historyCursors = ref<{ active: string | null; archived: string | null }>({
+  active: null,
+  archived: null,
+});
+const hasMoreHistory = computed(
+  () => !!historyCursors.value.active || !!historyCursors.value.archived,
+);
+async function loadProblems(more = false) {
+  const current = sessionId();
+  const states = ["active", "archived"] as const;
+  const pages = await Promise.all(
+    states.map(async (status) => {
+      const cursor = historyCursors.value[status];
+      if (more && !cursor) return { items: [] as Problem[], nextCursor: null };
+      return request<{ items: Problem[]; nextCursor: string | null }>(
+        `/problems?status=${status}&limit=30${more && cursor ? "&cursor=" + encodeURIComponent(cursor) : ""}`,
+      );
+    }),
+  );
+  if (current !== sessionId()) return;
+  const items = pages.flatMap((p) => p.items);
+  const keep = more
+    ? problems.value
+    : problems.value.filter((p) => p.id === selected.value);
   problems.value = [
-    ...recent,
-    ...archived.filter((item) => item.status === "archived"),
+    ...new Map([...keep, ...items].map((p) => [p.id, p])).values(),
   ];
+  historyCursors.value = {
+    active: pages[0].nextCursor,
+    archived: pages[1].nextCursor,
+  };
 }
 function discardConversationState(id: string) {
   chat.discardDraft(id);
@@ -466,7 +506,7 @@ function discardConversationState(id: string) {
   if (operations.delete(id)) saveKnowledgeOperations(owner, operations);
 }
 async function changeConversation(id: string, change: ConversationChange) {
-  if (busy.value || pendingChat.value || chat.preparing.value) return;
+  if (busy.value || chat.preparing.value) return;
   await act(async () => {
     const path = `/problems/${encodeURIComponent(id)}`;
     let updated: Problem | null = null;
@@ -485,7 +525,10 @@ async function changeConversation(id: string, change: ConversationChange) {
         change.status === "archived")
     ) {
       if (selected.value === id) await enterNewConversation();
-      discardConversationState(id);
+      if (!updated) {
+        chat.discardMissingConversation(id);
+        discardConversationState(id);
+      }
     }
     if (!updated && change !== "delete") throw new Error("这段对话已删除。");
     await loadProblems();
@@ -506,7 +549,7 @@ async function refresh() {
         !pendingChat.value)
     ) {
       if (!current) chat.discardMissingConversation(previous.id);
-      discardConversationState(previous.id);
+      if (!current) discardConversationState(previous.id);
       await enterNewConversation();
       note.value = current ? "这段对话已归档。" : "这段对话已删除。";
     } else if (!problem.value) storeProblem(previous.id, current);
@@ -568,13 +611,18 @@ async function enterAccount(session: AuthSession) {
 }
 async function initialize() {
   account.value = await request<Account>("/auth/me");
+  setSessionAccount(account.value);
+  loadPreferences();
+  sidebarCollapsed.value = readWorkspace().collapsed || false;
   chat.restore();
   tab.value = "讨论";
   const restoringKnowledgeId = [
     ...readKnowledgeOperations(sessionId()).keys(),
   ].at(-1);
   const restoringProblemId =
-    pendingChat.value?.problemId || restoringKnowledgeId;
+    (preferences.restoreWork ? readWorkspace().selected : undefined) ||
+    pendingChat.value?.problemId ||
+    restoringKnowledgeId;
   newProblem.value = !restoringProblemId;
   if (restoringProblemId) selected.value = restoringProblemId;
   await loadProblems();
@@ -592,30 +640,19 @@ async function initialize() {
     }
   }
   await load();
-  if (
-    pendingChat.value?.job &&
-    !pendingChat.value.operation &&
-    pendingChat.value.state !== "stale"
-  ) {
-    // A restored model task must not keep the whole workspace busy until it finishes.
-    const restoringSession = sessionId();
-    restoringChat.value = true;
-    void chat
-      .resume()
-      .catch((failure) => {
-        if (
-          restoringSession === sessionId() &&
-          !(failure instanceof ApiError && failure.status === 499)
-        )
-          error.value =
-            failure instanceof Error
-              ? failure.message
-              : "回答尚未恢复，可以稍后重试。";
-      })
-      .finally(() => {
-        if (restoringSession === sessionId()) restoringChat.value = false;
-      });
+  chat.setTarget(newProblem.value ? "new" : selected.value);
+  void chat.recover().catch((failure) => {
+    if (logged.value)
+      note.value =
+        failure instanceof Error ? failure.message : "任务状态暂时无法恢复。";
+  });
+  await refreshModel();
+  if (settingsRequested) {
+    settingsRequested = false;
+    await nextTick();
+    sidebar.value?.openSettings();
   }
+  restoreScroll();
 }
 async function job(path: string, body: unknown) {
   const id = selected.value;
@@ -636,16 +673,25 @@ async function job(path: string, body: unknown) {
 async function send() {
   if (
     (!chatDraft.value.trim() && !draftFiles.value.length) ||
-    pendingChat.value
+    chat.preparing.value
   )
     return;
   thinkingOpen.value = false;
-  await act(() =>
-    chat.send(
+  error.value = "";
+  const current = sessionId();
+  void chat
+    .send(
       newProblem.value ? null : selected.value || null,
       chosenSources.value,
-    ),
-  );
+      true,
+    )
+    .catch((failure) => {
+      if (
+        current === sessionId() &&
+        !(failure instanceof ApiError && failure.status === 499)
+      )
+        error.value = failure instanceof Error ? failure.message : "发送失败";
+    });
 }
 async function stopMissingMedia() {
   if (
@@ -735,9 +781,198 @@ async function forgetMemory(memory: Memory) {
     }),
   );
 }
+const defaultModel = ref({ provider: "", model: "", configured: false });
+const conversationProvider = ref("deepseek"),
+  conversationModel = ref("");
+const findOpen = ref(false),
+  findQuery = ref(""),
+  findIndex = ref(-1),
+  findInput = ref<HTMLInputElement>();
+const showBottom = ref(false),
+  copyStatus = ref("");
+let settingsRequested = false;
+const currentQueue = computed(() => chat.queues.value[draftTarget.value] || []);
+const runStates = computed(() =>
+  Object.fromEntries(
+    Object.entries(chat.pendings.value).map(([id, p]) => [
+      id,
+      p.error
+        ? "需处理"
+        : p.job?.status === "queued"
+          ? "排队中"
+          : p.state === "cancelled"
+            ? "已停止"
+            : p.state === "failed"
+              ? "失败"
+              : p.state === "done"
+                ? "已完成"
+                : "运行中",
+    ]),
+  ),
+);
+const currentModel = computed(
+  () =>
+    chat.models.value[draftTarget.value]?.model ||
+    defaultModel.value.model ||
+    "配置模型",
+);
+const isRunning = computed(
+  () =>
+    !!pendingChat.value?.job &&
+    ["queued", "running"].includes(pendingChat.value.job.status),
+);
+async function refreshModel() {
+  const current = sessionId();
+  try {
+    const value = await request<typeof defaultModel.value>("/settings/model");
+    if (current === sessionId()) defaultModel.value = value;
+  } catch {
+    /* Settings presents the actionable error. */
+  }
+}
+function useConversationModel() {
+  chat.setModel(
+    draftTarget.value,
+    conversationModel.value.trim()
+      ? {
+          provider: conversationProvider.value,
+          model: conversationModel.value.trim(),
+        }
+      : {},
+  );
+}
+async function copyMessage(id: string, content: string) {
+  try {
+    await navigator.clipboard.writeText(content);
+    copyStatus.value = id;
+    setTimeout(() => {
+      if (copyStatus.value === id) copyStatus.value = "";
+    }, 1800);
+  } catch {
+    error.value = "复制失败，请选择文字后使用系统复制。";
+  }
+}
+async function searchSelect(id: string, messageId: string | null) {
+  await openConversation(id);
+  await nextTick();
+  if (messageId) {
+    const element = document.getElementById("message-" + messageId);
+    element?.scrollIntoView({ block: "center" });
+    element?.classList.add("search-highlight");
+    setTimeout(() => element?.classList.remove("search-highlight"), 3000);
+  }
+}
+function findNext() {
+  const matches = messages.value.filter((m) =>
+    m.content.toLocaleLowerCase().includes(findQuery.value.toLocaleLowerCase()),
+  );
+  if (!findQuery.value || !matches.length) {
+    note.value = "当前对话没有匹配内容。";
+    return;
+  }
+  findIndex.value = (findIndex.value + 1) % matches.length;
+  document
+    .getElementById("message-" + matches[findIndex.value].id)
+    ?.scrollIntoView({ block: "center" });
+  note.value = `找到 ${matches.length} 处，当前第 ${findIndex.value + 1} 处。`;
+}
+function saveScroll() {
+  if (!logged.value || busy.value || !selected.value || !mainPane.value) return;
+  const state = readWorkspace();
+  state.scroll = {
+    ...state.scroll,
+    [selected.value]: mainPane.value.scrollTop,
+  };
+  state.selected = newProblem.value ? "" : selected.value;
+  state.collapsed = sidebarCollapsed.value;
+  try {
+    writeWorkspace(state);
+  } catch {}
+  showBottom.value =
+    mainPane.value.scrollHeight -
+      mainPane.value.scrollTop -
+      mainPane.value.clientHeight >
+    300;
+}
+function restoreScroll() {
+  void nextTick(() => {
+    if (mainPane.value && selected.value)
+      mainPane.value.scrollTop =
+        readWorkspace().scroll?.[selected.value] ?? mainPane.value.scrollHeight;
+  });
+}
+function toBottom() {
+  mainPane.value?.scrollTo({
+    top: mainPane.value.scrollHeight,
+    behavior: "smooth",
+  });
+}
+function onSettingsRequested() {
+  if (!logged.value) settingsRequested = true;
+}
+function shortcut(event: KeyboardEvent) {
+  if (!logged.value || (!event.metaKey && !event.ctrlKey) || event.altKey)
+    return;
+  const key = event.key.toLowerCase();
+  if (document.querySelector("dialog[open]")) return;
+  if (key === "n") {
+    event.preventDefault();
+    void openNewProblem();
+  } else if (key === "k") {
+    event.preventDefault();
+    sidebar.value?.openSearch();
+  } else if (key === ",") {
+    event.preventDefault();
+    sidebar.value?.openSettings();
+  } else if (key === "b") {
+    event.preventDefault();
+    sidebarCollapsed.value = !sidebarCollapsed.value;
+  } else if (key === "f") {
+    event.preventDefault();
+    findOpen.value = true;
+    void nextTick(() => findInput.value?.focus());
+  } else if (key === "u" && event.shiftKey) {
+    event.preventDefault();
+    fileInput.value?.click();
+  } else if (key === "." && isRunning.value) {
+    event.preventDefault();
+    void chat.cancel().catch((e) => (error.value = e.message));
+  }
+}
+watch(sidebarCollapsed, () => {
+  if (logged.value)
+    try {
+      writeWorkspace({ ...readWorkspace(), collapsed: sidebarCollapsed.value });
+    } catch {}
+});
+watch(
+  () => pendingChat.value?.job?.partialContent,
+  async () => {
+    const pane = mainPane.value;
+    const follow =
+      pane && pane.scrollHeight - pane.scrollTop - pane.clientHeight < 220;
+    await nextTick();
+    if (follow && mainPane.value)
+      mainPane.value.scrollTop = mainPane.value.scrollHeight;
+  },
+);
+watch(draftTarget, (id) => {
+  chat.setTarget(id);
+  const model = chat.models.value[id];
+  conversationProvider.value =
+    model?.provider || defaultModel.value.provider || "deepseek";
+  conversationModel.value = model?.model || "";
+});
 watch([selected, tab, newProblem], ([id], [old]) => {
   memoryOverview.stop();
   if (id !== old) {
+    if (logged.value)
+      try {
+        writeWorkspace({
+          ...readWorkspace(),
+          selected: newProblem.value ? "" : id,
+        });
+      } catch {}
     editingGoal.value = false;
     goalDraft.value = "";
     clearData();
@@ -747,10 +982,17 @@ watch([selected, tab, newProblem], ([id], [old]) => {
     sourceText.value = "";
     sourceUrl.value = "";
   }
-  if (logged.value && !busy.value) void act(load);
+  if (logged.value && !busy.value)
+    void act(async () => {
+      await load();
+      restoreScroll();
+    });
 });
 onMounted(() => {
   window.addEventListener("session-ended", ended);
+  window.addEventListener("decision-open-settings", onSettingsRequested);
+  window.addEventListener("decision-model-changed", refreshModel);
+  document.addEventListener("keydown", shortcut);
   window.addEventListener("media-cleanup-error", cleanupFailure);
   document.addEventListener("pointerdown", closeThinking);
   if (logged.value) void act(initialize);
@@ -760,6 +1002,9 @@ onUnmounted(() => {
   memoryOverview.stop();
   chat.dispose();
   window.removeEventListener("session-ended", ended);
+  window.removeEventListener("decision-open-settings", onSettingsRequested);
+  window.removeEventListener("decision-model-changed", refreshModel);
+  document.removeEventListener("keydown", shortcut);
   window.removeEventListener("media-cleanup-error", cleanupFailure);
   document.removeEventListener("pointerdown", closeThinking);
 });
@@ -782,16 +1027,22 @@ onUnmounted(() => {
       :new-problem="newProblem"
       :active-tab="tab"
       :busy="busy || chat.preparing.value"
-      :pending="!!pendingChat"
+      :pending="false"
+      :has-more="hasMoreHistory"
+      :runs="runStates"
+      :unread="chat.unread.value"
+      @more="act(() => loadProblems(true))"
+      @search-select="searchSelect"
       @new="openNewProblem"
       @select="openConversation"
       @change="changeConversation"
       @tool="tab = $event"
-      @logout="logout"
+      @logout="() => logout()"
       @modal="sidebarModal = $event"
     />
     <main
       ref="mainPane"
+      @scroll.passive="saveScroll"
       @wheel.passive="scrollInteraction++"
       @touchmove.passive="scrollInteraction++"
       @pointerdown="scrollInteraction++"
@@ -803,6 +1054,23 @@ onUnmounted(() => {
         'library-page': tab === '资料与主题',
       }"
     >
+      <form v-if="findOpen" class="find-chat" @submit.prevent="findNext">
+        <Search :size="16" /><input
+          ref="findInput"
+          v-model="findQuery"
+          placeholder="查找当前对话"
+          aria-label="查找当前对话"
+          @input="findIndex = -1"
+        /><button class="secondary">下一处</button
+        ><button
+          type="button"
+          class="icon-button"
+          aria-label="关闭查找"
+          @click="findOpen = false"
+        >
+          <X :size="16" />
+        </button>
+      </form>
       <header class="page-header">
         <button
           class="icon-button mobile-menu-toggle"
@@ -819,7 +1087,7 @@ onUnmounted(() => {
             tab !== "讨论"
               ? tab
               : newProblem
-                ? "知衡"
+                ? "Decision"
                 : problem?.title || "对话"
           }}
         </h1>
@@ -847,7 +1115,7 @@ onUnmounted(() => {
         </div>
         <template v-if="tab === '讨论'">
           <div v-if="emptyConversation" class="chat-welcome">
-            <span class="welcome-mark" aria-hidden="true">知</span>
+            <span class="welcome-mark" aria-hidden="true">D</span>
             <h2>从你现在想到的说起。</h2>
             <p>不用整理好，一句话就可以。</p>
           </div>
@@ -890,6 +1158,7 @@ onUnmounted(() => {
           <article
             v-for="m in newProblem ? [] : messages"
             :key="m.id"
+            :id="'message-' + m.id"
             class="message"
             :class="m.role"
           >
@@ -912,6 +1181,13 @@ onUnmounted(() => {
               v-html="renderMarkdown(m.content)"
             />
             <p v-else class="pre">{{ m.content }}</p>
+            <div class="message-actions">
+              <button class="text-button" @click="copyMessage(m.id, m.content)">
+                <Copy :size="14" />{{
+                  copyStatus === m.id ? "已复制" : "复制"
+                }}</button
+              ><span v-if="m.model" class="muted">{{ m.model }}</span>
+            </div>
             <ChatRecords
               v-if="m.role === 'assistant'"
               :message="m"
@@ -937,58 +1213,125 @@ onUnmounted(() => {
               {{ pendingChat!.content }}
             </p>
           </article>
-          <div
-            v-if="pendingChat && !busy"
-            class="pending-recovery"
-            role="status"
+          <article
+            v-if="pendingChat?.job?.partialContent"
+            class="message assistant streaming-message"
           >
-            <p v-if="restoringChat">回答仍在生成，你可以先查看资料或记忆。</p>
-            <p v-else-if="pendingChat.mediaUnavailable">
-              本机附件暂存已丢失，无法继续这次发送。此前的请求可能已收到，请先查看历史；停止等待不会重新发送或删除服务端记录。
-            </p>
-            <p v-else-if="pendingChat.state === 'stale'">
-              原话还在。对话内容已有变化，请调整后再发。
-            </p>
-            <p
-              v-else-if="
-                !pendingChat.operation && pendingChat.job?.status === 'failed'
-              "
+            <small
+              >决策助手 ·
+              {{
+                isRunning
+                  ? "正在生成"
+                  : pendingChat.state === "cancelled"
+                    ? "已停止 · 未完成"
+                    : "未完成回答"
+              }}</small
             >
-              回答暂时没生成，原话已经保存。
-            </p>
-            <p v-else-if="pendingChat.state === 'done'">
-              回答已经生成，正在恢复显示。
-            </p>
-            <p v-else>原话还在，可以接着获取回答。</p>
+            <div
+              class="markdown-body"
+              v-html="renderMarkdown(pendingChat.job.partialContent)"
+            />
+          </article>
+          <div v-if="pendingChat" class="run-status" role="status">
+            <span v-if="isRunning && !pendingChat.error"
+              ><LoaderCircle :size="14" class="spinning" />{{
+                pendingChat.stageLabel ||
+                (pendingChat.job?.status === "queued"
+                  ? "等待执行"
+                  : "正在生成回答…")
+              }}</span
+            >
+            <span v-else-if="pendingChat.error"
+              >{{ pendingChat.error }}。已保留任务，可继续获取结果。</span
+            ><span v-else-if="pendingChat.state === 'cancelled'"
+              >已停止。保留的内容是未完成回答。</span
+            >
+            <span v-else-if="pendingChat.mediaUnavailable"
+              >本机附件缓存不可用。请先核对历史，再移除本次等待。</span
+            >
+            <span v-else>{{
+              pendingChat.error || "原话已保留，可以继续获取回答。"
+            }}</span>
             <button
-              v-if="!restoringChat && pendingChat.mediaUnavailable"
+              v-if="isRunning"
+              class="secondary"
+              @click="chat.cancel().catch((e) => (error = e.message))"
+            >
+              <Square :size="12" />停止
+            </button>
+            <button
+              v-if="isRunning && pendingChat.error"
+              class="secondary"
+              @click="chat.resume().catch((e) => (error = e.message))"
+            >
+              重新连接</button
+            ><button
+              v-else-if="pendingChat.mediaUnavailable"
+              class="secondary"
               @click="stopMissingMedia"
             >
               停止等待并查看历史
             </button>
             <button
-              v-else-if="!restoringChat && pendingChat.state === 'stale'"
+              v-else-if="pendingChat.state === 'stale'"
+              class="secondary"
               @click="editOriginal"
             >
               调整原话
             </button>
             <button
-              v-else-if="!restoringChat"
-              @click="act(() => chat.resume(true))"
+              v-else-if="!isRunning && pendingChat.state !== 'cancelled'"
+              class="secondary"
+              @click="chat.resume(true).catch((e) => (error = e.message))"
             >
               {{ pendingAction }}
             </button>
             <button
               v-if="
-                !restoringChat &&
-                !pendingChat.operation &&
                 pendingChat.job &&
-                ['failed', 'succeeded'].includes(pendingChat.job.status)
+                ['failed', 'succeeded', 'cancelled'].includes(
+                  pendingChat.job.status,
+                )
               "
-              class="secondary"
-              @click="leaveConversation"
+              class="text-button"
+              @click="chat.leaveFinished()"
             >
-              先聊别的
+              收起状态，继续聊天
+            </button>
+          </div>
+          <div v-if="currentQueue.length" class="queue-panel">
+            <strong>本机待发送 · {{ currentQueue.length }}</strong>
+            <p class="muted">
+              {{
+                chat.pausedQueues.value[draftTarget]
+                  ? "队列已暂停，尚未发送。"
+                  : "当前回答完成后依次发送；关闭应用后暂停。"
+              }}
+            </p>
+            <div
+              v-for="queued in currentQueue"
+              :key="queued.operation?.key"
+              class="queue-row"
+            >
+              <span
+                >{{ queued.content || "附件消息"
+                }}<small v-if="queued.files?.length">
+                  · {{ queued.files.length }} 个附件</small
+                ></span
+              ><button
+                class="icon-button"
+                aria-label="取消这条排队消息"
+                @click="chat.cancelQueued(draftTarget, queued.operation!.key)"
+              >
+                <X :size="15" />
+              </button>
+            </div>
+            <button
+              v-if="chat.pausedQueues.value[draftTarget] && !isRunning"
+              class="secondary"
+              @click="chat.continueQueue().catch((e) => (error = e.message))"
+            >
+              继续发送队列
             </button>
           </div>
           <KnowledgeConversation
@@ -1001,6 +1344,14 @@ onUnmounted(() => {
             @before-reveal="revealKnowledgeSuggestion"
             @library="tab = '资料与主题'"
           />
+          <button
+            v-if="showBottom"
+            class="jump-bottom"
+            aria-label="回到最新消息"
+            @click="toBottom"
+          >
+            <ArrowDown :size="16" />最新消息
+          </button>
           <div class="composer-dock">
             <form
               ref="composer"
@@ -1026,7 +1377,7 @@ onUnmounted(() => {
                 :items="draftFiles"
                 local
                 removable
-                :disabled="busy || !!pendingChat"
+                :disabled="busy"
                 @remove="
                   (id) => {
                     try {
@@ -1052,19 +1403,45 @@ onUnmounted(() => {
                   @compositionstart="composing = true"
                   @compositionend="composing = false"
                   maxlength="12000"
-                  :disabled="busy || !!pendingChat"
+                  :disabled="busy"
                   :placeholder="
                     newProblem ? '说说你的想法，或现在困扰你的事…' : '接着说…'
                   "
                 />
               </label>
               <div class="composer-actions">
+                <details class="model-picker">
+                  <summary>
+                    {{ currentModel }}<ChevronDown :size="12" />
+                  </summary>
+                  <div class="model-picker-panel">
+                    <strong>本次对话模型</strong
+                    ><label
+                      >提供商<select v-model="conversationProvider">
+                        <option value="deepseek">DeepSeek</option>
+                        <option value="openai">OpenAI</option>
+                      </select></label
+                    ><label
+                      >模型<input
+                        v-model="conversationModel"
+                        placeholder="留空使用账号默认模型" /></label
+                    ><button type="button" @click="useConversationModel">
+                      应用</button
+                    ><button
+                      type="button"
+                      class="text-button"
+                      @click="sidebar?.openSettings()"
+                    >
+                      管理模型配置
+                    </button>
+                  </div>
+                </details>
                 <button
                   type="button"
                   class="icon-button attachment-add"
                   aria-label="添加图片或文件"
                   title="添加图片或文件 · 最多4个"
-                  :disabled="busy || !!pendingChat || chat.preparing.value"
+                  :disabled="busy || chat.preparing.value"
                   @click="fileInput?.click()"
                 >
                   <Paperclip :size="19" />
@@ -1079,7 +1456,7 @@ onUnmounted(() => {
                     class="thinking-trigger"
                     aria-label="思考等级"
                     :aria-expanded="thinkingOpen"
-                    :disabled="busy || !!pendingChat"
+                    :disabled="busy"
                     @click="thinkingOpen = !thinkingOpen"
                   >
                     {{ thinkingLabel(selectedThinking)
@@ -1130,11 +1507,10 @@ onUnmounted(() => {
                 </details>
                 <button
                   class="send-button"
-                  aria-label="发送"
-                  :title="busy ? '正在处理' : '发送'"
+                  :aria-label="pendingChat ? '加入待发送队列' : '发送'"
+                  :title="pendingChat ? '加入本机待发送队列' : '发送'"
                   :disabled="
                     busy ||
-                    !!pendingChat ||
                     chat.preparing.value ||
                     (!chatDraft.trim() && !draftFiles.length)
                   "
@@ -1159,7 +1535,7 @@ onUnmounted(() => {
           :problems="problems"
           :context-id="knowledgeProblemId"
           :busy="busy"
-          :can-navigate="!busy && !pendingChat"
+          :can-navigate="!busy"
           v-model:title="sourceTitle"
           v-model:text="sourceText"
           v-model:url="sourceUrl"

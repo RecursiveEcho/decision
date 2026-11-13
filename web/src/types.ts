@@ -16,8 +16,13 @@ export interface Evidence {
 export type ConversationChange =
   | { title: string }
   | { status: "active" | "archived" }
+  | { pinned: boolean }
+  | { group: string }
   | "delete";
 export interface Problem {
+  pinned?: boolean;
+  group?: string;
+  updatedAt?: string;
   status?: "active" | "archived";
   id: string;
   title: string;
@@ -26,6 +31,8 @@ export interface Problem {
   unknowns: string[];
 }
 export interface Message {
+  provider?: string;
+  model?: string;
   id: string;
   role: string;
   content: string;
@@ -148,6 +155,11 @@ export interface Device {
   lastError: string | null;
 }
 export interface Job {
+  problemId?: string;
+  partialContent?: string;
+  stage?: string;
+  provider?: string;
+  model?: string;
   id: string;
   kind?: string;
   status: string;

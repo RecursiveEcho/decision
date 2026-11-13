@@ -1,13 +1,16 @@
 import type { Job, Thinking } from "./types";
 import type { LocalFile } from "./mediaStorage";
-
 export const CHAT_STORAGE = "decision.chat-session";
 export interface ChatOperation {
   path: string;
   key: string;
-  body:
-    | { content: string; sourceIds?: string[]; thinking?: Thinking }
-    | Record<string, never>;
+  body: {
+    content?: string;
+    sourceIds?: string[];
+    thinking?: Thinking;
+    provider?: string;
+    model?: string;
+  };
   attachmentSnapshotKey?: string;
 }
 export interface PendingChat {
@@ -19,93 +22,108 @@ export interface PendingChat {
   problemId: string | null;
   operation?: ChatOperation;
   job?: Job;
-  state: "sending" | "waiting" | "failed" | "stale" | "done";
+  state:
+    | "sending"
+    | "waiting"
+    | "failed"
+    | "stale"
+    | "done"
+    | "cancelled"
+    | "queued";
+  cursor?: number;
+  error?: string;
+  stageLabel?: string;
 }
 export interface ChatSession {
   owner: string;
   drafts: Record<string, string>;
   pending: PendingChat | null;
+  pendings?: Record<string, PendingChat>;
+  queues?: Record<string, PendingChat[]>;
   files?: Record<string, LocalFile[]>;
   thinking?: Record<string, Thinking>;
+  models?: Record<string, { provider?: string; model?: string }>;
 }
-export function clearChatSession() {
+function storage(): Storage {
+  return typeof localStorage === "undefined" ? sessionStorage : localStorage;
+}
+const key = (owner: string) => `${CHAT_STORAGE}:${encodeURIComponent(owner)}`;
+export function clearChatSession(owner?: string) {
+  if (owner) storage().removeItem(key(owner));
   sessionStorage.removeItem(CHAT_STORAGE);
+}
+function validPending(p: any): boolean {
+  return (
+    !!p &&
+    typeof p.content === "string" &&
+    p.content.length <= 12000 &&
+    (p.problemId === null || typeof p.problemId === "string") &&
+    [
+      "sending",
+      "waiting",
+      "failed",
+      "stale",
+      "done",
+      "cancelled",
+      "queued",
+    ].includes(p.state) &&
+    (!p.operation ||
+      (typeof p.operation.key === "string" &&
+        /^\/(conversations|problems\/[\w-]+\/messages|jobs\/[\w-]+\/retry)$/.test(
+          p.operation.path,
+        ) &&
+        typeof p.operation.body === "object")) &&
+    (!p.job ||
+      (typeof p.job.id === "string" && typeof p.job.status === "string")) &&
+    (!p.files || validFiles(p.files))
+  );
+}
+function validFiles(files: any): boolean {
+  return (
+    Array.isArray(files) &&
+    files.length <= 4 &&
+    files.every(
+      (f) =>
+        f &&
+        typeof f.id === "string" &&
+        typeof f.name === "string" &&
+        typeof f.mimeType === "string" &&
+        ["image", "document"].includes(f.kind) &&
+        f.size > 0 &&
+        f.size <= 8 * 1024 * 1024,
+    ) &&
+    files.reduce((n, f) => n + f.size, 0) <= 16 * 1024 * 1024
+  );
 }
 export function readChatSession(owner: string): ChatSession {
   const empty = { owner, drafts: {}, pending: null };
   try {
-    const value = JSON.parse(sessionStorage.getItem(CHAT_STORAGE) || "null");
-    if (!owner || !value || value.owner !== owner) {
-      clearChatSession();
-      return empty;
-    }
-    const p = value.pending;
-    const validText = (v: unknown) =>
-      typeof v === "string" && v.length <= 12000;
-    const validThinking = (v: unknown) =>
-      ["off", "low", "high", "max"].includes(String(v));
-    const validFiles = (v: unknown) =>
-      Array.isArray(v) &&
-      v.length <= 4 &&
-      v.reduce((total, file) => total + (file?.size || 0), 0) <=
-        16 * 1024 * 1024 &&
-      v.every(
-        (file) =>
-          file &&
-          typeof file.id === "string" &&
-          typeof file.name === "string" &&
-          typeof file.mimeType === "string" &&
-          ["image", "document"].includes(file.kind) &&
-          Number.isFinite(file.size) &&
-          file.size > 0 &&
-          file.size <= 8 * 1024 * 1024,
-      );
+    const value = JSON.parse(
+      storage().getItem(key(owner)) ||
+        sessionStorage.getItem(CHAT_STORAGE) ||
+        "null",
+    );
+    if (!owner || !value || value.owner !== owner) return empty;
     if (
       !value.drafts ||
       typeof value.drafts !== "object" ||
-      !Object.values(value.drafts).every(validText) ||
-      (value.files &&
-        (typeof value.files !== "object" ||
-          !Object.values(value.files).every(validFiles))) ||
+      !Object.values(value.drafts).every(
+        (v) => typeof v === "string" && v.length <= 12000,
+      ) ||
+      (value.pending && !validPending(value.pending)) ||
+      (value.pendings && !Object.values(value.pendings).every(validPending)) ||
+      (value.queues &&
+        !Object.values(value.queues).every(
+          (q) => Array.isArray(q) && q.length <= 20 && q.every(validPending),
+        )) ||
+      (value.files && !Object.values(value.files).every(validFiles)) ||
       (value.thinking &&
-        (typeof value.thinking !== "object" ||
-          !Object.values(value.thinking).every(validThinking))) ||
-      (p &&
-        (!validText(p.content) ||
-          (p.files && !validFiles(p.files)) ||
-          (p.thinking && !validThinking(p.thinking)) ||
-          (p.mediaKey !== undefined && typeof p.mediaKey !== "string") ||
-          (p.mediaUnavailable !== undefined &&
-            typeof p.mediaUnavailable !== "boolean") ||
-          (!p.content.trim() && !p.files?.length) ||
-          !["sending", "waiting", "failed", "stale", "done"].includes(
-            p.state,
-          ) ||
-          !(p.problemId === null || typeof p.problemId === "string") ||
-          (!p.job && !p.operation && p.state !== "stale") ||
-          (p.job &&
-            (typeof p.job.id !== "string" ||
-              typeof p.job.status !== "string")) ||
-          (p.operation &&
-            (typeof p.operation.key !== "string" ||
-              (p.operation.attachmentSnapshotKey &&
-                typeof p.operation.attachmentSnapshotKey !== "string") ||
-              !/^\/(conversations|problems\/[\w-]+\/messages|jobs\/[\w-]+\/retry)$/.test(
-                p.operation.path,
-              ) ||
-              !p.operation.body ||
-              typeof p.operation.body !== "object"))))
-    ) {
-      clearChatSession();
+        !Object.values(value.thinking).every((v) =>
+          ["off", "low", "high", "max"].includes(String(v)),
+        ))
+    )
       return empty;
-    }
-    return {
-      owner,
-      drafts: value.drafts,
-      pending: p || null,
-      files: value.files || {},
-      thinking: value.thinking || {},
-    };
+    return { ...empty, ...value, owner };
   } catch {
     return empty;
   }
@@ -113,10 +131,10 @@ export function readChatSession(owner: string): ChatSession {
 export function writeChatSession(value: ChatSession) {
   if (!value.owner) return;
   try {
+    storage().setItem(key(value.owner), JSON.stringify(value));
+    // Old session-only clients can recover a write whose HTTP result is unknown.
     sessionStorage.setItem(CHAT_STORAGE, JSON.stringify(value));
   } catch {
-    throw new Error(
-      "浏览器未能暂存这段话，请检查存储权限后再发送。原话仍保留在当前页面。",
-    );
+    throw new Error("未能保存本机草稿，请检查存储空间。原话仍保留在当前页面。");
   }
 }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onUnmounted, ref, watch } from "vue";
 import { FileText, X, Download, Image as ImageIcon } from "@lucide/vue";
-import { attachmentBlob, sessionId } from "./api";
+import { attachmentBlob, sessionId, accountId } from "./api";
 import { getMedia, type LocalFile } from "./mediaStorage";
 import { fileSize } from "./attachments";
 import type { Attachment } from "./types";
@@ -18,10 +18,11 @@ const preview = ref<HTMLDialogElement | null>(null);
 const selected = ref<{ name: string; url: string } | null>(null);
 let generation = 0;
 const activeOwner = sessionId();
+const mediaOwner = accountId();
 async function blobFor(item: LocalFile | Attachment) {
   if (props.local)
     return (
-      await getMedia(activeOwner, item.id, () => sessionId() === activeOwner)
+      await getMedia(mediaOwner, item.id, () => sessionId() === activeOwner)
     )[0]!.blob;
   return attachmentBlob(item.id);
 }

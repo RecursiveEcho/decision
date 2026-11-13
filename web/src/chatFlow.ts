@@ -1,7 +1,6 @@
-import { ref } from "vue";
-import { ApiError, request, sessionId, sessionExpiry, waitJob } from "./api";
+import { computed, ref } from "vue";
+import { ApiError, accountId, request, sessionId, sleep } from "./api";
 import {
-  clearChatSession,
   readChatSession,
   writeChatSession,
   type PendingChat,
@@ -19,194 +18,272 @@ import {
 import { checkFileLimits, prepareFile, toDataUrl } from "./attachments";
 
 export function useChatFlow(callbacks: {
-  accepted: (id: string, problem?: Problem) => void;
-  refresh: () => Promise<void>;
+  accepted: (id: string, problem?: Problem, sourceTarget?: string) => void;
+  refresh: (id?: string) => Promise<void>;
 }) {
-  const pending = ref<PendingChat | null>(null);
+  const target = ref("new");
+  const pendings = ref<Record<string, PendingChat>>({});
+  const queues = ref<Record<string, PendingChat[]>>({});
+  const pausedQueues = ref<Record<string, boolean>>({});
   const drafts = ref<Record<string, string>>({});
   const files = ref<Record<string, LocalFile[]>>({});
   const thinking = ref<Record<string, Thinking>>({});
+  const models = ref<Record<string, { provider?: string; model?: string }>>({});
   const preparing = ref(false);
-  let stagingSend = false;
+  const unread = ref<Record<string, boolean>>({});
+  const pending = computed({
+    get: () => pendings.value[target.value] || null,
+    set: (value: PendingChat | null) => {
+      if (value) pendings.value[target.value] = value;
+      else delete pendings.value[target.value];
+    },
+  });
   let owner = "",
+    epoch = "",
     disposed = false;
+  const observers = new Set<string>();
+  const sends = new Set<string>();
+  const validOwner = () =>
+    !disposed && !!owner && owner === accountId() && epoch === sessionId();
   const active = (p: PendingChat) =>
-    !disposed && !!owner && owner === sessionId() && pending.value === p;
+    validOwner() && Object.values(pendings.value).includes(p);
+  const mediaIds = (p: PendingChat) => [
+    ...(p.files || []).map((f) => f.id),
+    ...(p.mediaKey ? [p.mediaKey] : []),
+  ];
   function save() {
-    if (!owner || owner !== sessionId())
-      throw new ApiError("已退出登录，停止等待请求。", 499);
+    if (!validOwner()) throw new ApiError("已退出登录，停止等待请求。", 499);
     writeChatSession({
       owner,
       drafts: drafts.value,
       pending: pending.value,
+      pendings: pendings.value,
+      queues: queues.value,
       files: files.value,
       thinking: thinking.value,
+      models: models.value,
     });
+  }
+  function setTarget(id: string) {
+    target.value = id || "new";
+    delete unread.value[target.value];
   }
   function restore() {
-    owner = sessionId();
-    const stored = readChatSession(owner);
-    drafts.value = stored.drafts;
-    pending.value = stored.pending;
-    files.value = stored.files || {};
-    thinking.value = stored.thinking || {};
-  }
-  function validOwner(value: string) {
-    return !disposed && !!value && owner === value && sessionId() === value;
+    owner = accountId();
+    epoch = sessionId();
+    disposed = false;
+    const value = readChatSession(owner);
+    drafts.value = value.drafts;
+    files.value = value.files || {};
+    thinking.value = value.thinking || {};
+    models.value = value.models || {};
+    pendings.value =
+      value.pendings ||
+      (value.pending
+        ? { [value.pending.problemId || "new"]: value.pending }
+        : {});
+    queues.value = value.queues || {};
+    pausedQueues.value = Object.fromEntries(
+      Object.keys(queues.value).map((id) => [id, true]),
+    );
+    if (value.pending && target.value === "new")
+      target.value = value.pending.problemId || "new";
   }
   function release(ids: string[]) {
-    const capturedOwner = owner;
-    const referenced = new Set(
-      Object.values(files.value)
+    const captured = owner,
+      capturedEpoch = epoch;
+    const referenced = new Set([
+      ...Object.values(files.value)
         .flat()
-        .map((file) => file.id),
-    );
-    for (const file of pending.value?.files || []) referenced.add(file.id);
-    if (pending.value?.mediaKey) referenced.add(pending.value.mediaKey);
+        .map((f) => f.id),
+      ...Object.values(pendings.value).flatMap(mediaIds),
+      ...Object.values(queues.value).flat().flatMap(mediaIds),
+    ]);
     void deleteMedia(
-      capturedOwner,
+      captured,
       ids.filter((id) => !referenced.has(id)),
-      () => validOwner(capturedOwner),
-    ).catch(() => {
-      if (validOwner(capturedOwner))
-        window.dispatchEvent(
-          new CustomEvent("media-cleanup-error", {
-            detail: "部分本机附件缓存未能清理，退出时将再次清理。",
-          }),
-        );
-    });
+      () => validOwner() && epoch === capturedEpoch,
+    ).catch(() => {});
   }
-  const mediaIds = (p: PendingChat) => [
-    ...(p.files || []).map((file) => file.id),
-    ...(p.mediaKey ? [p.mediaKey] : []),
-  ];
-  async function addFiles(target: string, incoming: File[]) {
-    if (preparing.value || pending.value || stagingSend)
-      throw new Error("附件正在处理，请稍等。");
-    const currentOwner = owner;
-    const current = files.value[target] || [];
+  async function addFiles(id: string, incoming: File[]) {
+    if (preparing.value) throw new Error("附件正在处理，请稍等。");
+    const capturedEpoch = epoch,
+      current = files.value[id] || [];
     checkFileLimits([...current, ...incoming]);
     preparing.value = true;
     try {
       const prepared: StoredFile[] = [];
       for (const file of incoming) {
         prepared.push(await prepareFile(file));
-        if (!validOwner(currentOwner)) throw new ApiError("会话已结束。", 499);
+        if (!validOwner() || epoch !== capturedEpoch)
+          throw new ApiError("会话已结束。", 499);
       }
       checkFileLimits([...current, ...prepared]);
       for (const file of prepared)
-        await putMedia(currentOwner, file.id, [file], sessionExpiry(), () =>
-          validOwner(currentOwner),
+        await putMedia(
+          owner,
+          file.id,
+          [file],
+          Date.now() + 30 * 86400000,
+          () => validOwner() && epoch === capturedEpoch,
         );
-      if (!validOwner(currentOwner)) throw new ApiError("会话已结束。", 499);
-      files.value[target] = [...current, ...prepared.map(localMetadata)];
+      if (!validOwner() || epoch !== capturedEpoch) return;
+      files.value[id] = [...current, ...prepared.map(localMetadata)];
       save();
     } finally {
-      preparing.value = false;
+      if (epoch === capturedEpoch) preparing.value = false;
     }
   }
-  function removeFile(target: string, id: string) {
-    if (pending.value || preparing.value || stagingSend) return;
-    files.value[target] = (files.value[target] || []).filter(
-      (file) => file.id !== id,
-    );
+  function removeFile(id: string, fileId: string) {
+    if (preparing.value) return;
+    files.value[id] = (files.value[id] || []).filter((f) => f.id !== fileId);
     save();
-    release([id]);
+    release([fileId]);
   }
-  function setThinking(target: string, value: Thinking) {
-    if (pending.value || stagingSend) return;
-    thinking.value[target] = value;
+  function setThinking(id: string, value: Thinking) {
+    thinking.value[id] = value;
     save();
   }
-  function setDraft(target: string, value: string) {
-    drafts.value[target] = value;
+  function setModel(id: string, value: { provider?: string; model?: string }) {
+    models.value[id] = value;
     save();
   }
-  function discardDraft(target: string) {
-    const ids = (files.value[target] || []).map((file) => file.id);
-    delete drafts.value[target];
-    delete files.value[target];
-    delete thinking.value[target];
+  function setDraft(id: string, value: string) {
+    drafts.value[id] = value;
     save();
-    if (ids.length) release(ids);
+  }
+  function discardDraft(id: string) {
+    const ids = (files.value[id] || []).map((f) => f.id);
+    delete drafts.value[id];
+    delete files.value[id];
+    delete thinking.value[id];
+    save();
+    release(ids);
   }
   function discardMissingConversation(id: string) {
-    const operation = pending.value;
-    if (operation?.problemId !== id) return;
-    pending.value = null;
+    const p = pendings.value[id];
+    delete pendings.value[id];
+    const queued = queues.value[id] || [];
+    delete queues.value[id];
     save();
-    release(mediaIds(operation));
+    if (p) release(mediaIds(p));
+    release(queued.flatMap(mediaIds));
   }
   function clear() {
     owner = "";
-    pending.value = null;
+    epoch = "";
+    pendings.value = {};
+    queues.value = {};
     drafts.value = {};
     files.value = {};
     thinking.value = {};
-    clearChatSession();
+    models.value = {};
+    unread.value = {};
+    observers.clear();
+    sends.clear();
   }
   async function finish(p: PendingChat) {
     if (!active(p)) return;
     p.state = "done";
     save();
-    await callbacks.refresh();
+    await callbacks.refresh(p.problemId || undefined);
     if (active(p)) {
-      pending.value = null;
+      const id = p.problemId || "new";
+      delete pendings.value[id];
+      if (target.value !== id) unread.value[id] = true;
       save();
       release(mediaIds(p));
+      void drain(id).catch(() => {});
     }
   }
   async function observe(p: PendingChat, reload = false) {
-    if (!p.job || !active(p)) return;
-    if (reload) {
-      const j = await request<Job>(`/jobs/${p.job.id}`);
-      if (!active(p)) return;
-      p.job = j;
-    }
+    if (!p.job || !active(p) || observers.has(p.job.id)) return;
+    const jobId = p.job.id;
+    observers.add(jobId);
     try {
-      const completed = await waitJob(
-        p.job,
-        () => active(p),
-        (j) => {
-          p.job = j;
-          p.state =
-            j.status === "failed"
-              ? "failed"
-              : j.status === "succeeded"
-                ? "done"
-                : "waiting";
+      if (reload) {
+        const fresh = await request<Job>(`/jobs/${jobId}`);
+        if (!active(p)) return;
+        if (!["succeeded", "failed", "cancelled"].includes(p.job.status))
+          p.job = fresh;
+      }
+      while (active(p) && p.job) {
+        if (p.job.status === "succeeded") {
+          await finish(p);
+          return;
+        }
+        if (p.job.status === "failed") {
+          p.state = "failed";
+          p.error = p.job.error?.message || "回答未完成";
+          pausedQueues.value[p.problemId || "new"] = true;
           save();
-        },
-      );
-      if (completed && active(p)) await finish(p);
+          throw new Error(p.error);
+        }
+        if (p.job.status === "cancelled") {
+          p.state = "cancelled";
+          pausedQueues.value[p.problemId || "new"] = true;
+          save();
+          return;
+        }
+        const response = await request<{
+          items: { id: number; type: string; data: { label?: string } }[];
+          nextCursor: number;
+          job: Job;
+        }>(`/jobs/${jobId}/events?after=${p.cursor || 0}`);
+        if (!active(p)) return;
+        if (["succeeded", "failed", "cancelled"].includes(p.job.status))
+          continue;
+        const previousCursor = p.cursor || 0;
+        if (response.nextCursor < previousCursor) {
+          await sleep(400);
+          continue;
+        }
+        p.job = response.job;
+        p.cursor = response.nextCursor;
+        p.error = undefined;
+        for (const event of response.items)
+          if (
+            event.id > previousCursor &&
+            event.type === "stage" &&
+            event.data.label
+          )
+            p.stageLabel = event.data.label;
+        // The server snapshot is authoritative. Never append deltas to the same snapshot.
+        p.state = "waiting";
+        save();
+        if (["queued", "running"].includes(p.job.status)) await sleep(400);
+      }
     } catch (e) {
-      if (active(p)) await callbacks.refresh().catch(() => {});
+      if (active(p)) {
+        p.error = e instanceof Error ? e.message : "连接中断，可继续获取回答";
+        save();
+        await callbacks.refresh(p.problemId || undefined).catch(() => {});
+      }
       throw e;
+    } finally {
+      observers.delete(jobId);
     }
   }
   async function perform(p: PendingChat) {
     const op = p.operation;
     if (!op || !active(p)) return;
-    // Save both initial and retry operations before any write, including their immutable payload/key.
     save();
     try {
       let body: unknown = op.body;
       if (op.attachmentSnapshotKey) {
-        const capturedOwner = owner;
-        const snapshot = await getMedia(
-          capturedOwner,
-          op.attachmentSnapshotKey,
-          () => active(p),
+        const snapshot = await getMedia(owner, op.attachmentSnapshotKey, () =>
+          active(p),
         );
         const attachments = await Promise.all(
-          snapshot.map(async (file) => ({
-            name: file.name,
-            dataUrl: await toDataUrl(file.blob),
+          snapshot.map(async (f) => ({
+            name: f.name,
+            dataUrl: await toDataUrl(f.blob),
           })),
         );
         if (!active(p)) return;
         body = { ...op.body, attachments };
       }
+      const sourceTarget = p.problemId || "new";
       const result = await request<Job | { problem: Problem; job: Job }>(
         op.path,
         "POST",
@@ -215,86 +292,89 @@ export function useChatFlow(callbacks: {
       );
       if (!active(p)) return;
       if ("problem" in result) {
+        delete pendings.value[sourceTarget];
         p.problemId = result.problem.id;
         p.job = result.job;
-        callbacks.accepted(result.problem.id, result.problem);
+        pendings.value[p.problemId] = p;
+        if (sourceTarget === "new") {
+          drafts.value[p.problemId] = drafts.value.new || "";
+          files.value[p.problemId] = files.value.new || [];
+          delete drafts.value.new;
+          delete files.value.new;
+        }
+        if (target.value === sourceTarget) target.value = p.problemId;
+        callbacks.accepted(p.problemId, result.problem, sourceTarget);
       } else {
         p.job = result;
-        callbacks.accepted(p.problemId!);
+        callbacks.accepted(p.problemId!, undefined, sourceTarget);
       }
-      if (p.problemId) thinking.value[p.problemId] = p.thinking || "off";
+      if (p.problemId) {
+        thinking.value[p.problemId] = p.thinking || "off";
+        models.value[p.problemId] = {
+          provider: op.body.provider,
+          model: op.body.model,
+        };
+      }
       p.operation = undefined;
       p.state = "waiting";
+      p.error = undefined;
       save();
-      // The server has the original sentence now. Loading it is read-only and may be retried.
-      await callbacks.refresh().catch(() => {});
+      await callbacks.refresh(p.problemId || undefined).catch(() => {});
       await observe(p);
     } catch (e) {
       if (!active(p)) return;
-      if (e instanceof MissingMediaError) {
-        p.mediaUnavailable = true;
-        save();
-      } else if (
-        e instanceof ApiError &&
-        e.code === "JOB_NOT_RETRYABLE" &&
-        p.job
-      ) {
-        p.operation = undefined;
-        save();
-        const current = await request<Job>(`/jobs/${p.job.id}`);
-        if (!active(p)) return;
-        p.job = current;
-        if (current.status !== "failed") return observe(p);
-        p.state = "stale";
-        save();
-      } else if (
+      p.error = e instanceof Error ? e.message : "发送未完成";
+      if (e instanceof MissingMediaError) p.mediaUnavailable = true;
+      else if (
         e instanceof ApiError &&
         [400, 404, 409, 413].includes(e.status)
       ) {
         p.operation = undefined;
         p.state = "stale";
-        save();
       }
+      save();
       throw e;
     }
   }
-  async function send(targetId: string | null, sourceIds: string[] = []) {
-    if (pending.value || stagingSend)
-      throw new Error("上一段话还在处理中，请先恢复或重试回答。");
-    const target = targetId || "new";
-    const content = drafts.value[target] || "";
-    const selectedFiles = [...(files.value[target] || [])];
-    const selectedThinking = thinking.value[target] || "off";
+  async function snapshot(
+    targetId: string | null,
+    sourceIds: string[],
+  ): Promise<PendingChat> {
+    const id = targetId || "new",
+      content = drafts.value[id] || "",
+      selectedFiles = [...(files.value[id] || [])],
+      key = crypto.randomUUID();
     if ((!content.trim() && !selectedFiles.length) || content.length > 12000)
       throw new Error("请写一句想聊的话，最多12000字。");
     if (preparing.value) throw new Error("附件正在处理，请稍等。");
-    const key = crypto.randomUUID();
+    const capturedEpoch = epoch;
     if (selectedFiles.length) {
-      stagingSend = true;
-      preparing.value = true;
-      const capturedOwner = owner;
-      try {
-        const originals = (
-          await Promise.all(
-            selectedFiles.map((file) =>
-              getMedia(capturedOwner, file.id, () => validOwner(capturedOwner)),
+      const originals = (
+        await Promise.all(
+          selectedFiles.map((f) =>
+            getMedia(
+              owner,
+              f.id,
+              () => validOwner() && capturedEpoch === epoch,
             ),
-          )
-        ).flat();
-        checkFileLimits(originals);
-        await putMedia(capturedOwner, key, originals, sessionExpiry(), () =>
-          validOwner(capturedOwner),
-        );
-        if (!validOwner(capturedOwner)) throw new ApiError("会话已结束。", 499);
-      } finally {
-        stagingSend = false;
-        preparing.value = false;
-      }
+          ),
+        )
+      ).flat();
+      checkFileLimits(originals);
+      await putMedia(
+        owner,
+        key,
+        originals,
+        Date.now() + 30 * 86400000,
+        () => validOwner() && capturedEpoch === epoch,
+      );
     }
-    pending.value = {
+    if (!validOwner() || epoch !== capturedEpoch)
+      throw new ApiError("会话已结束。", 499);
+    return {
       content,
       files: selectedFiles,
-      thinking: selectedThinking,
+      thinking: thinking.value[id] || "off",
       ...(selectedFiles.length ? { mediaKey: key } : {}),
       problemId: targetId,
       state: "sending",
@@ -302,19 +382,54 @@ export function useChatFlow(callbacks: {
         path: targetId ? `/problems/${targetId}/messages` : "/conversations",
         key,
         ...(selectedFiles.length ? { attachmentSnapshotKey: key } : {}),
-        body: targetId
-          ? { content, sourceIds: [...sourceIds], thinking: selectedThinking }
-          : { content, thinking: selectedThinking },
+        body: {
+          content,
+          ...(targetId ? { sourceIds: [...sourceIds] } : {}),
+          thinking: thinking.value[id] || "off",
+          ...models.value[id],
+        },
       },
     };
-    save();
-    drafts.value[target] = "";
-    files.value[target] = [];
-    save();
-    await perform(pending.value);
   }
-  async function resume(retryFailed = false) {
-    const p = pending.value;
+  async function send(
+    targetId: string | null,
+    sourceIds: string[] = [],
+    allowQueue = false,
+  ) {
+    const id = targetId || "new";
+    setTarget(id);
+    if (sends.has(id)) throw new Error("上一段话正在发送，请稍等。");
+    if (pendings.value[id] && !allowQueue)
+      throw new Error("上一段话还在处理中，请先恢复或重试回答。");
+    sends.add(id);
+    let p: PendingChat;
+    try {
+      p = await snapshot(targetId, sourceIds);
+      if (pendings.value[id]) {
+        if (!targetId) throw new Error("首条消息尚未创建对话，请稍后排队。");
+        if ((queues.value[id] || []).length >= 20)
+          throw new Error("本机会话队列最多20条。");
+        p.state = "queued";
+        (queues.value[id] ||= []).push(p);
+        save();
+        drafts.value[id] = "";
+        files.value[id] = [];
+        save();
+        return;
+      }
+      pendings.value[id] = p;
+      save();
+      drafts.value[id] = "";
+      files.value[id] = [];
+      save();
+      p = pendings.value[id];
+    } finally {
+      sends.delete(id);
+    }
+    return perform(p!);
+  }
+  async function resume(retryFailed = false, id = target.value) {
+    const p = pendings.value[id];
     if (!p || !active(p)) return;
     if (p.state === "stale")
       throw new Error("这段话的依据已发生变化，请调整原话后再发送。");
@@ -325,18 +440,32 @@ export function useChatFlow(callbacks: {
         key: crypto.randomUUID(),
         body: {},
       };
+      p.cursor = 0;
       save();
       return perform(p);
     }
     return observe(p, true);
   }
+  async function cancel(id = target.value) {
+    const p = pendings.value[id];
+    if (!p?.job) return;
+    const result = await request<Job>(`/jobs/${p.job.id}/cancel`, "POST", {});
+    if (!active(p)) return;
+    p.job = result;
+    if (p.job.status === "succeeded") return finish(p);
+    if (p.job.status === "cancelled") {
+      p.state = "cancelled";
+      pausedQueues.value[id] = true;
+    }
+    save();
+  }
   function editOriginal() {
     const p = pending.value;
     if (!p || p.state !== "stale") return;
-    drafts.value[p.problemId || "new"] = p.content;
-    files.value[p.problemId || "new"] = p.files || [];
-    thinking.value[p.problemId || "new"] = p.thinking || "off";
-    pending.value = null;
+    drafts.value[target.value] = p.content;
+    files.value[target.value] = p.files || [];
+    thinking.value[target.value] = p.thinking || "off";
+    delete pendings.value[target.value];
     save();
     if (p.mediaKey) release([p.mediaKey]);
   }
@@ -346,28 +475,89 @@ export function useChatFlow(callbacks: {
       !p ||
       p.operation ||
       !p.job ||
-      !["failed", "succeeded"].includes(p.job.status)
+      !["failed", "succeeded", "cancelled"].includes(p.job.status)
     )
       throw new Error("这段话还未确认处理结果，请先恢复发送。");
-    // This only releases local waiting state. The original sentence remains in server history.
-    pending.value = null;
+    delete pendings.value[target.value];
     save();
     release(mediaIds(p));
   }
   function leaveMissingMedia() {
     const p = pending.value;
     if (!p?.mediaUnavailable) return;
-    // Explicitly dismiss waiting only; never restore as a new write or change its idempotency key.
-    pending.value = null;
+    delete pendings.value[target.value];
     save();
     release(mediaIds(p));
   }
+  function cancelQueued(id: string, key: string) {
+    const q = queues.value[id] || [];
+    const removed = q.find((p) => p.operation?.key === key);
+    queues.value[id] = q.filter((p) => p.operation?.key !== key);
+    save();
+    if (removed) release(mediaIds(removed));
+  }
+  async function drain(id: string) {
+    if (
+      !validOwner() ||
+      pendings.value[id] ||
+      pausedQueues.value[id] ||
+      !queues.value[id]?.length
+    )
+      return;
+    const p = queues.value[id].shift()!;
+    p.state = "sending";
+    pendings.value[id] = p;
+    save();
+    await perform(pendings.value[id]);
+  }
+  async function continueQueue(id = target.value) {
+    const p = pendings.value[id];
+    if (p?.job && ["failed", "cancelled"].includes(p.job.status)) {
+      delete pendings.value[id];
+      release(mediaIds(p));
+    }
+    pausedQueues.value[id] = false;
+    save();
+    await drain(id);
+  }
+  async function recover() {
+    const captured = epoch;
+    let cursor: string | null = null;
+    do {
+      const remote: { items: Job[]; nextCursor?: string | null } =
+        await request(
+          `/jobs?kind=chat&status=active&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+        );
+      if (!validOwner() || epoch !== captured) return;
+      for (const job of remote.items) {
+        if (job.problemId && !pendings.value[job.problemId])
+          pendings.value[job.problemId] = {
+            problemId: job.problemId,
+            content: "",
+            job,
+            state: "waiting",
+          };
+      }
+      cursor = remote.nextCursor || null;
+    } while (cursor);
+    save();
+    for (const [id, p] of Object.entries(pendings.value))
+      if (p.job && !p.operation && p.state !== "stale")
+        void resume(false, id).catch(() => {});
+  }
   return {
     pending,
+    pendings,
+    queues,
+    pausedQueues,
     drafts,
     files,
     thinking,
+    models,
     preparing,
+    unread,
+    setTarget,
+    setModel,
     addFiles,
     removeFile,
     setThinking,
@@ -378,9 +568,13 @@ export function useChatFlow(callbacks: {
     clear,
     send,
     resume,
+    cancel,
     editOriginal,
     leaveFinished,
     leaveMissingMedia,
+    cancelQueued,
+    continueQueue,
+    recover,
     dispose: () => {
       disposed = true;
     },
