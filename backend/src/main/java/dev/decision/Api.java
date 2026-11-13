@@ -76,8 +76,9 @@ class Api {
               // A replay can predate status support or a manual rename/archive.
               problem.set("status", current.get("status"));
               problem.set("title", current.get("title"));
-            } else if (status == 202 && cached.hasNonNull("id")) {
-              // The remaining 202 responses with an id are bare Job representations.
+            } else if ((status == 202 || path.matches("/api/v1/jobs/[^/]+/cancel"))
+                && cached.hasNonNull("id")) {
+              // Job creation and cancellation caches must obey current visibility after deletion.
               s.get("job", cached.path("id").asText());
             } else if (cached.hasNonNull("proposalId")) {
               s.get("knowledge_proposal", cached.path("proposalId").asText());

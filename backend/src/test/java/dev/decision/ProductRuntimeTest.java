@@ -326,13 +326,38 @@ class ProductRuntimeTest extends AdminFixture {
       String id = convo.path("job").path("id").asText();
       CompletableFuture<Boolean> running = CompletableFuture.supplyAsync(worker::runOne);
       assertTrue(fixture.started.await(5, TimeUnit.SECONDS));
-      events.cancel(id);
+      postJson("/jobs/" + id.toUpperCase(Locale.ROOT) + "/cancel", owner, Json.obj(), 200);
       assertTrue(running.get(3, TimeUnit.SECONDS));
       assertEquals("cancelled", state(id));
       var queued = conversation("排队后取消");
       events.cancel(queued.path("job").path("id").asText());
       assertFalse(worker.runOne());
       assertEquals(1, fixture.calls.get());
+    }
+  }
+
+  @Test
+  void cancellationReplayCannotRevealDeletedConversationPartial() throws Exception {
+    try (var fixture = new UpstreamFixture(true, false)) {
+      var convo = conversation("我喜欢简短回答。我决定选方案甲。");
+      String id = convo.path("job").path("id").asText();
+      String problem = convo.path("problem").path("id").asText();
+      CompletableFuture<Boolean> running = CompletableFuture.supplyAsync(worker::runOne);
+      assertTrue(fixture.started.await(5, TimeUnit.SECONDS));
+      until(() -> !s.get("job", id).path("partialContent").asText().isEmpty());
+      String path = "/api/v1/jobs/" + id + "/cancel", key = Json.id();
+      var stopped = req(post(path).header("Idempotency-Key", key), owner, Json.obj(), 200);
+      assertEquals("cancelled", stopped.path("status").asText());
+      assertFalse(stopped.path("partialContent").asText().isEmpty());
+      assertTrue(running.get(3, TimeUnit.SECONDS));
+      assertEquals(stopped, req(post(path).header("Idempotency-Key", key), owner, Json.obj(), 200));
+      req(delete("/api/v1/problems/" + problem), owner, null, 204);
+      req(get("/api/v1/jobs/" + id), owner, null, 404);
+      req(get("/api/v1/jobs/" + id + "/events"), owner, null, 404);
+      var replay = req(post(path).header("Idempotency-Key", key), owner, Json.obj(), 404);
+      assertFalse(replay.has("partialContent"));
+      assertFalse(replay.toString().contains(stopped.path("partialContent").asText()));
+      req(post(path).header("Idempotency-Key", Json.id()), owner, Json.obj(), 404);
     }
   }
 

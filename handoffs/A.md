@@ -282,3 +282,7 @@ E真实链路发现：合并时模型将新增机制擅自解释成排他方案�
 旧回归 fixture 调整保留原意：在接收 Job 前设置模型服务以匹配冻结语义；重试结束后发送下轮；容量压力使用其他任务类型；知识旧队列测试显式种入迁移前的两轮队列；账号测试通过公开设置接口各自保存 Key，仅测试 Spy 将 endpoint 定位 loopback，生产没有额外 endpoint 开关。知识建议正向验证的是自动排队，不误称已同步确认入库。
 
 OpenAI 已知非推理系列启用思考返回明确 `MODEL_CAPABILITY_UNSUPPORTED` 提示关闭思考或选推理模型，不静默忽略。未知提供商模型的特定参数支持仍以实际连接/调用结果为准。源码按 Google Java Format 统一整理；编译、diff 检查通过。真实 OpenAI/DeepSeek 付费链路、桌面完整流程由 E 集成验收，A 未动旧 Preview、运行库或真实记忆。
+
+### 独立审查跟进：取消缓存与 UUID 大小写
+
+修复 cancel 的 200 幂等缓存重放绕过可见性检查：重放在同一写事务内重新读取 Job，删除会话后同 Key 和新 Key 均 404，不能从缓存显示 partialContent。修复大写 UUID 取消数据库状态却未关闭上游：signal 使用持久 Job 返回的规范化 id。新增 HTTP 重放删除测试，并将阻塞 SSE 取消测试改为大写 URL UUID；隔离 `ProductRuntimeTest,BackendTest` **59 项通过**，格式及 diff 检查通过。

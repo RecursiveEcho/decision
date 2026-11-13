@@ -172,7 +172,7 @@ class RunEvents {
               }
               return s.get("job", id);
             });
-    if (result.path("status").asText().equals("cancelled")) signal(id);
+    if (result.path("status").asText().equals("cancelled")) signal(result.path("id").asText());
     return result;
   }
 
