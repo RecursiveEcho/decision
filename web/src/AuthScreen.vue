@@ -104,7 +104,7 @@ onUnmounted(() => {
               required
               minlength="3"
               maxlength="32"
-              pattern="[A-Za-z0-9_][A-Za-z0-9_.-]{2,31}"
+              pattern="[A-Za-z0-9_][A-Za-z0-9_.\-]{2,31}"
               autocomplete="username"
               autocapitalize="none"
               spellcheck="false"
