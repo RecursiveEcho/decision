@@ -274,3 +274,11 @@ E真实链路发现：合并时模型将新增机制擅自解释成排他方案�
 `mvn -q -f backend/pom.xml -DskipTests package` 通过。新增隔离单元/数据库运行测试 11 项中 10 项通过；剩余测试将知识建议队列误认为同步提案，正在修正验收断言。原 140 项回归的 6 处旧 fixture 与新会话串行/账号 Key 隔离/配置快照语义不符，正在调整；不能将本候选视为完整验收。测试为 loopback HTTP 替身，不代表真实提供商验收。原生一次性 PostgreSQL 启停脚本 `backend/test-native.py` 不读取运行库。
 
 连接测试按官方 DeepSeek thinking 文档显式 disabled，512 token 预算；OpenAI 仅发送 max_completion_tokens，不发送 DeepSeek thinking 字段。参考 https://api-docs.deepseek.com/guides/thinking_mode/ 与 https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create 。
+
+### 隔离回归完成
+
+2026-11-13 20:07 Asia/Shanghai：一次性原生 PostgreSQL 上完整 **152 项测试通过，0 失败、0 错误、0 跳过**。命令 `python3 backend/test-native.py --postgres-bin <isolated-runtime>/postgres/bin`，报告仅本机 `backend/target/surefire-reports`。新增测试覆盖真实 loopback SSE 中间正文与游标、转义与 emoji、破流可恢复片段、上游等待取消、解析完成而未提交时取消、提交完成先于取消、取消后无记忆/决定/知识排队副作用、合法副作用正向对照、账号独立凭据/无凭据零上游请求、临时测试 Key 不保存、清除 Key、运行中更换配置仍用加密快照、响应无 Key、同会话冲突、搜索/删除隔离。
+
+旧回归 fixture 调整保留原意：在接收 Job 前设置模型服务以匹配冻结语义；重试结束后发送下轮；容量压力使用其他任务类型；知识旧队列测试显式种入迁移前的两轮队列；账号测试通过公开设置接口各自保存 Key，仅测试 Spy 将 endpoint 定位 loopback，生产没有额外 endpoint 开关。知识建议正向验证的是自动排队，不误称已同步确认入库。
+
+OpenAI 已知非推理系列启用思考返回明确 `MODEL_CAPABILITY_UNSUPPORTED` 提示关闭思考或选推理模型，不静默忽略。未知提供商模型的特定参数支持仍以实际连接/调用结果为准。源码按 Google Java Format 统一整理；编译、diff 检查通过。真实 OpenAI/DeepSeek 付费链路、桌面完整流程由 E 集成验收，A 未动旧 Preview、运行库或真实记忆。

@@ -59,7 +59,9 @@ class ApiFilter extends OncePerRequestFilter {
               : 1_048_576;
       if (req.getContentLengthLong() > limit) throw new ApiError(413, "BODY_TOO_LARGE", "请求超过大小限制");
       HttpServletRequest wrapped = req;
-      if (req.getMethod().equals("POST") || req.getMethod().equals("PATCH") || req.getMethod().equals("PUT")) {
+      if (req.getMethod().equals("POST")
+          || req.getMethod().equals("PATCH")
+          || req.getMethod().equals("PUT")) {
         byte[] body = req.getInputStream().readNBytes(limit + 1);
         if (body.length > limit) throw new ApiError(413, "BODY_TOO_LARGE", "请求超过大小限制");
         wrapped =

@@ -125,33 +125,77 @@ class Api {
   }
 
   @GetMapping("/settings/model")
-  ObjectNode modelSettings() { return d.settings.view(); }
-  @PutMapping("/settings/model")
-  ObjectNode modelSettings(@RequestBody JsonNode body) { return d.settings.update(body); }
-  @DeleteMapping("/settings/model/key")
-  ObjectNode deleteModelKey(@RequestParam String provider) { return d.settings.clearKey(provider); }
-  @GetMapping("/settings/models")
-  ObjectNode models(@RequestParam String provider) { return d.settings.models(provider); }
-  @PostMapping("/settings/model/test")
-  ObjectNode testModel(@RequestBody JsonNode body,HttpServletRequest request) {
-    String key=request.getHeader("Idempotency-Key");
-    if(key==null) throw new ApiError(400,"IDEMPOTENCY_KEY_REQUIRED","测试请求需要幂等键");
-    return d.settings.test(body,key);
+  ObjectNode modelSettings() {
+    return d.settings.view();
   }
+
+  @PutMapping("/settings/model")
+  ObjectNode modelSettings(@RequestBody JsonNode body) {
+    return d.settings.update(body);
+  }
+
+  @DeleteMapping("/settings/model/key")
+  ObjectNode deleteModelKey(@RequestParam String provider) {
+    return d.settings.clearKey(provider);
+  }
+
+  @GetMapping("/settings/models")
+  ObjectNode models(@RequestParam String provider) {
+    return d.settings.models(provider);
+  }
+
+  @PostMapping("/settings/model/test")
+  ObjectNode testModel(@RequestBody JsonNode body, HttpServletRequest request) {
+    String key = request.getHeader("Idempotency-Key");
+    if (key == null) throw new ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "测试请求需要幂等键");
+    return d.settings.test(body, key);
+  }
+
   @GetMapping("/settings/memory")
-  ObjectNode memorySettings() { return Json.obj("mode","local","central",Json.obj("connected",false,"enabled",false),"notice","当前使用本地记忆；统一个人记忆中心接口已预留，尚未连接或迁移数据。"); }
+  ObjectNode memorySettings() {
+    return Json.obj(
+        "mode",
+        "local",
+        "central",
+        Json.obj("connected", false, "enabled", false),
+        "notice",
+        "当前使用本地记忆；统一个人记忆中心接口已预留，尚未连接或迁移数据。");
+  }
+
   @GetMapping("/conversations/search")
-  ObjectNode search(@RequestParam String q,@RequestParam(required=false) String cursor,@RequestParam(defaultValue="30") int limit) { return d.search(q,cursor,limit); }
+  ObjectNode search(
+      @RequestParam String q,
+      @RequestParam(required = false) String cursor,
+      @RequestParam(defaultValue = "30") int limit) {
+    return d.search(q, cursor, limit);
+  }
+
   @GetMapping("/jobs")
-  ObjectNode jobs(@RequestParam(defaultValue="chat") String kind,@RequestParam(defaultValue="active") String status,@RequestParam(required=false) String cursor,@RequestParam(defaultValue="100") int limit) { return d.activeJobs(kind,status,cursor,limit); }
+  ObjectNode jobs(
+      @RequestParam(defaultValue = "chat") String kind,
+      @RequestParam(defaultValue = "active") String status,
+      @RequestParam(required = false) String cursor,
+      @RequestParam(defaultValue = "100") int limit) {
+    return d.activeJobs(kind, status, cursor, limit);
+  }
+
   @GetMapping("/jobs/{id}/events")
-  ObjectNode events(@PathVariable String id,@RequestParam(defaultValue="0") long after) { return d.runs.events(id,after); }
+  ObjectNode events(@PathVariable String id, @RequestParam(defaultValue = "0") long after) {
+    return d.runs.events(id, after);
+  }
+
   @PostMapping("/jobs/{id}/cancel")
-  ResponseEntity<?> cancel(@PathVariable String id,@RequestBody JsonNode body,HttpServletRequest request) {
-    return post(request,body,200,() -> {
-      if(!body.isObject() || !body.isEmpty()) throw new ApiError(400,"INVALID_REQUEST","停止请求体必须为空对象");
-      return d.runs.cancel(id);
-    });
+  ResponseEntity<?> cancel(
+      @PathVariable String id, @RequestBody JsonNode body, HttpServletRequest request) {
+    return post(
+        request,
+        body,
+        200,
+        () -> {
+          if (!body.isObject() || !body.isEmpty())
+            throw new ApiError(400, "INVALID_REQUEST", "停止请求体必须为空对象");
+          return d.runs.cancel(id);
+        });
   }
 
   @PostMapping("/problems")

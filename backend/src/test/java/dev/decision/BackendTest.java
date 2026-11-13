@@ -649,6 +649,7 @@ class BackendTest extends AdminFixture {
     assertTrue(worker.runOne());
     var retry = post("/api/v1/jobs/" + job + "/retry").header("Idempotency-Key", retryKey);
     req(retry, owner, Json.obj(), 202);
+    assertTrue(worker.runOne());
     var send = post(path + "/messages").header("Idempotency-Key", sendKey);
     var followup = Json.obj("content", "合成续聊");
     req(send, owner, followup, 202);
@@ -687,8 +688,6 @@ class BackendTest extends AdminFixture {
 
   @Test
   void deletionWhileModelIsRespondingDiscardsReplyAndLeavesOtherChatUsable() throws Exception {
-    JsonNode start = postJson("/conversations", owner, Json.obj("content", "将删除的合成讨论"), 202);
-    String p = start.at("/problem/id").asText();
     var entered = new java.util.concurrent.CountDownLatch(1);
     var resume = new java.util.concurrent.CountDownLatch(1);
     var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
@@ -706,6 +705,8 @@ class BackendTest extends AdminFixture {
                   "content", "迟到的合成回答", "evidence", Json.arr(), "uncertainties", Json.arr());
             });
     try {
+      JsonNode start = postJson("/conversations", owner, Json.obj("content", "将删除的合成讨论"), 202);
+      String p = start.at("/problem/id").asText();
       JsonNode other = postJson("/conversations", owner, Json.obj("content", "独立的合成讨论"), 202);
       var task = executor.submit(() -> worker.runOne());
       assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS));
@@ -731,12 +732,6 @@ class BackendTest extends AdminFixture {
 
   @Test
   void manualRenameIsNeverReplacedAndOldChatsAreNotAutoNamed() throws Exception {
-    JsonNode start = postJson("/conversations", owner, Json.obj("content", "原始标题"), 202);
-    String p = start.path("problem").path("id").asText();
-    req(patch("/api/v1/problems/" + p), owner, Json.obj("title", "本人名称"), 200);
-    req(patch("/api/v1/problems/" + p), owner, Json.obj("title", "原始标题"), 200);
-    assertFalse(
-        s.db.queryForObject("SELECT auto_title FROM records WHERE id=?::uuid", Boolean.class, p));
     var server =
         modelServer(
             request ->
@@ -750,6 +745,13 @@ class BackendTest extends AdminFixture {
                     "conversationTitle",
                     "模型不应覆盖的标题"));
     try {
+      JsonNode start = postJson("/conversations", owner, Json.obj("content", "原始标题"), 202);
+      String p = start.path("problem").path("id").asText();
+      req(patch("/api/v1/problems/" + p), owner, Json.obj("title", "本人名称"), 200);
+      req(patch("/api/v1/problems/" + p), owner, Json.obj("title", "原始标题"), 200);
+      assertFalse(
+          s.db.queryForObject("SELECT auto_title FROM records WHERE id=?::uuid", Boolean.class, p));
+
       assertTrue(worker.runOne());
       assertEquals("succeeded", job(start.path("job").path("id").asText()).path("status").asText());
       assertEquals("原始标题", s.get("problem", p).path("title").asText());
@@ -862,7 +864,7 @@ class BackendTest extends AdminFixture {
     assertTrue(worker.runOne());
     s.write(
         () -> {
-          for (int i = 0; i < 200; i++) s.job("chat", p, Json.obj(), "real");
+          for (int i = 0; i < 200; i++) s.job("overview", p, Json.obj(), "real");
           return null;
         });
     String key = Json.id();

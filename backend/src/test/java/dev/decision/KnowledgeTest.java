@@ -316,8 +316,14 @@ class KnowledgeTest extends AdminFixture {
                 in.has("request")
                     ? reply(Json.M.valueToTree(true))
                     : candidate(in, "create", "合成长期结论"))) {
-      postBody("/problems/" + p + "/messages", Json.obj("content", "合成旧轮"), 202);
+      String legacyJob =
+          postBody("/problems/" + p + "/messages", Json.obj("content", "合成旧轮"), 202)
+              .path("id")
+              .asText();
+      // Seed a pre-V10 queue containing two turns; the current API correctly rejects this overlap.
+      s.db.update("UPDATE jobs SET state='failed' WHERE id=?::uuid", legacyJob);
       postBody("/problems/" + p + "/messages", Json.obj("content", "合成新轮"), 202);
+      s.db.update("UPDATE jobs SET state='queued' WHERE id=?::uuid", legacyJob);
       assertTrue(worker.runOne());
       assertTrue(s.all("message", p).stream().noneMatch(m -> m.has("knowledgeSuggestion")));
       assertTrue(worker.runOne());

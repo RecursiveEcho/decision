@@ -177,7 +177,24 @@ class Store {
             "job",
             problemId,
             Json.obj(
-                "kind", kind, "status", "queued", "result", null, "error", null, "mode", mode, "problemId", problemId, "partialContent", "", "provider", input.path("provider").asText("deepseek"), "model", input.path("model").asText()));
+                "kind",
+                kind,
+                "status",
+                "queued",
+                "result",
+                null,
+                "error",
+                null,
+                "mode",
+                mode,
+                "problemId",
+                problemId,
+                "partialContent",
+                "",
+                "provider",
+                input.path("provider").asText("deepseek"),
+                "model",
+                input.path("model").asText()));
     db.update(
         "INSERT INTO jobs(account_id,id,problem_id,input) VALUES"
             + " (?::uuid,?::uuid,?::uuid,?::jsonb)",

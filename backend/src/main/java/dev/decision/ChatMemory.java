@@ -115,7 +115,8 @@ class ChatMemory implements MemoryClient {
         "sourceQuote", memory.path("sourceQuote").asText(""));
   }
 
-  public ArrayNode apply(String problemId, String userMessageId, JsonNode actions, Snapshot snapshot) {
+  public ArrayNode apply(
+      String problemId, String userMessageId, JsonNode actions, Snapshot snapshot) {
     return s.write(() -> applyLocked(problemId, userMessageId, actions, snapshot));
   }
 

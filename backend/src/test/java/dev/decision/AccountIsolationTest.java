@@ -38,6 +38,7 @@ class AccountIsolationTest {
   @Autowired Config config;
   @Autowired Auth auth;
   @Autowired Worker worker;
+  @org.springframework.boot.test.mock.mockito.SpyBean ModelSettings settings;
 
   static final String API = "/api/v1";
   static final String PASSWORD = " synthetic passphrase  ";
@@ -355,6 +356,28 @@ class AccountIsolationTest {
     String data =
         Base64.getEncoder().encodeToString(attachmentText.getBytes(StandardCharsets.UTF_8));
     try (Gateway gateway = new Gateway()) {
+      call(
+          put(API + "/settings/model"),
+          a,
+          Json.obj(
+              "provider",
+              "deepseek",
+              "model",
+              "synthetic-model",
+              "apiKey",
+              "synthetic-account-a-key"),
+          200);
+      call(
+          put(API + "/settings/model"),
+          b,
+          Json.obj(
+              "provider",
+              "deepseek",
+              "model",
+              "synthetic-model",
+              "apiKey",
+              "synthetic-account-b-key"),
+          200);
       String ajob =
           create(
                   "/problems/" + pa + "/messages",
@@ -555,11 +578,20 @@ class AccountIsolationTest {
       server.start();
       config.modelBase = "http://127.0.0.1:" + server.getAddress().getPort();
       config.modelKey = "synthetic-loopback-fixture";
+      org.mockito.Mockito.doAnswer(
+              invocation -> {
+                ModelSettings.Profile p = (ModelSettings.Profile) invocation.callRealMethod();
+                return new ModelSettings.Profile(
+                    p.provider(), p.model(), p.key(), config.modelBase);
+              })
+          .when(settings)
+          .profile(org.mockito.ArgumentMatchers.nullable(JsonNode.class));
     }
 
     @Override
     public void close() {
       server.stop(0);
+      org.mockito.Mockito.reset(settings);
     }
   }
 }

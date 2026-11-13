@@ -20,7 +20,9 @@ class Model {
       Store s,
       Attachments attachments,
       MemoryClient chatMemory,
-      DecisionCapture decisions, ModelSettings settings, RunEvents runs) {
+      DecisionCapture decisions,
+      ModelSettings settings,
+      RunEvents runs) {
     this.c = c;
     this.s = s;
     this.attachments = attachments;
@@ -334,13 +336,27 @@ class Model {
         payload.set("stream_options", Json.obj("include_usage", true));
         JsonContentStream decoder = new JsonContentStream(run::delta);
         try {
-          response = Upstream.stream(profile.base() + "/chat/completions", profile.key(), payload,
-              java.time.Duration.ofSeconds(seconds), maxBytes, decoder::accept, run.cancellation,
-              () -> runs.stage(run.id, "buffered_response", "模型返回完整响应，等待校验"));
-        } finally { run.flush(); }
+          response =
+              Upstream.stream(
+                  profile.base() + "/chat/completions",
+                  profile.key(),
+                  payload,
+                  java.time.Duration.ofSeconds(seconds),
+                  maxBytes,
+                  decoder::accept,
+                  run.cancellation,
+                  () -> runs.stage(run.id, "buffered_response", "模型返回完整响应，等待校验"));
+        } finally {
+          run.flush();
+        }
       } else {
-        response = Upstream.post(profile.base() + "/chat/completions", profile.key(), payload,
-            java.time.Duration.ofSeconds(seconds), maxBytes);
+        response =
+            Upstream.post(
+                profile.base() + "/chat/completions",
+                profile.key(),
+                payload,
+                java.time.Duration.ofSeconds(seconds),
+                maxBytes);
       }
       JsonNode choice = response.path("choices").path(0);
       raw = choice.path("message").path("content").asText("");
