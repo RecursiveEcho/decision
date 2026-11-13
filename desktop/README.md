@@ -23,3 +23,9 @@ python3 desktop/network-smoke.py --runtime .local/desktop/runtime
 应用包位于 `desktop/src-tauri/target/release/bundle/macos/Decision Preview.app`。检查包签名可运行 `codesign --verify --deep --strict` 并传入应用包路径。预览包使用本机临时签名，跨机器分发需要另外准备签名及公证。
 
 原生 smoke 用临时双库与合成资料验证服务，模型请求使用替身。加上 `--backend-tests` 会在临时原生库运行原有后端测试。实际通过的检查及待验收的 WKWebView 项目见 [桌面实施进度](../docs/desktop/PROGRESS.md)。
+
+## Decision Next 产品预览（阶段1–2）
+
+`bash desktop/build.sh --product-preview` 构建 `Decision Next.app`（0.2.0，`dev.decision.desktop.next`）。它与旧 Preview 使用不同数据目录；此命令不会导入旧数据库。模型配置入口已统一到登录后的应用设置，原生 ⌘, 打开同一设置中心。
+
+完整功能与测试边界见 `docs/desktop/PRODUCT_PHASE12_ACCEPTANCE.md`。共享个人记忆仅预留接口，仍使用本地实现；OpenAI实际调用需可用凭据单独验收，不能用DeepSeek或替身通过替代。

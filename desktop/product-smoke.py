@@ -50,7 +50,7 @@ class API:
             result = json.loads(data) if data else None
             native.require(response.status == expected,
                 f"{verb} {path.split('?')[0]}: expected {expected}, got {response.status}, "
-                + str((result or {}).get("error", {}).get("code", "")))
+                + str(((result or {}).get("error") or {}).get("code", "")))
             return result
 
     def login(self, credentials):
@@ -102,8 +102,8 @@ def provider(stack):
             if "SIDE_EFFECT_ACCEPTANCE" in prompt:
                 result.update({
                     "memoryActions": [{"action": "ADD", "scope": "global",
-                        "content": "我的长期偏好是合成青色", "sourceQuote": "我的长期偏好是合成青色"}],
-                    "decisionCandidate": {"choice": "采用合成方案甲", "quote": "我决定采用合成方案甲"},
+                        "content": "我喜欢简短回答", "sourceQuote": "我喜欢简短回答"}],
+                    "decisionCandidate": {"choice": "我决定选方案甲", "quote": "我决定选方案甲"},
                     "suggestKnowledge": True,
                 })
             answer = json.dumps(result, ensure_ascii=True)
@@ -206,7 +206,7 @@ def exercise(api, state):
     print("PASS: true SSE increments before completion, event cursor recovery, pin/group and message search.", flush=True)
 
     baseline_memory = api.request("/memories")["items"]
-    statement = "SIDE_EFFECT_ACCEPTANCE。我的长期偏好是合成青色。我决定采用合成方案甲。"
+    statement = "SIDE_EFFECT_ACCEPTANCE。我喜欢简短回答。我决定选方案甲。"
     baseline_decisions = api.request("/decisions")["items"]
     slow = api.request("/conversations", {"content": "SLOW_ACCEPTANCE。" + statement, "thinking": "off"}, expected=202)
     slow_id, slow_problem = slow["job"]["id"], slow["problem"]["id"]

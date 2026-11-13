@@ -274,7 +274,7 @@ fn main() {
             let settings = MenuItem::with_id(app, "settings", "设置…", true, Some("CmdOrCtrl+,"))?;
             let status = MenuItem::with_id(app, "status", "运行状态与诊断", true, None::<&str>)?;
             let quit = PredefinedMenuItem::quit(app, None)?;
-            let submenu = Submenu::with_items(app, "Decision Preview", true, &[&settings, &status, &quit])?;
+            let submenu = Submenu::with_items(app, app.config().product_name.as_deref().unwrap_or("Decision"), true, &[&settings, &status, &quit])?;
             let edit = Submenu::with_items(app, "编辑", true, &[
                 &PredefinedMenuItem::undo(app, None)?, &PredefinedMenuItem::redo(app, None)?,
                 &PredefinedMenuItem::cut(app, None)?, &PredefinedMenuItem::copy(app, None)?,

@@ -266,13 +266,26 @@ impl Services {
             self.secrets.wiki_token = value["token"].as_str().ok_or("Missing Wiki token")?.into();
             self.secrets.save(&self.config.installation)?;
         }
-        // Authenticate a GraphQL read before declaring Wiki ready.
-        let body = self.client.post(format!("{base}/graphql"))
-            .bearer_auth(&self.secrets.wiki_token)
-            .header("Content-Type", "application/json")
-            .body(r#"{"query":"{pages{list{id path}}}"}"#).send()?.text()?;
-        let response: serde_json::Value = serde_json::from_str(&body)?;
-        if !response["data"]["pages"]["list"].is_array() { return Err("Wiki authentication failed".into()); }
+        // Wiki binds HTTP before its authentication strategies finish loading.
+        // The identity proof above proves ownership, not authenticated readiness.
+        // Retry only this read, within the original startup deadline; never reinitialize data.
+        loop {
+            self.check_cancel()?;
+            if self.wiki.as_mut().unwrap().child.try_wait()?.is_some() {
+                return Err("Wiki process exited before authenticated readiness".into());
+            }
+            let ready = self.client.post(format!("{base}/graphql"))
+                .bearer_auth(&self.secrets.wiki_token)
+                .header("Content-Type", "application/json")
+                .body(r#"{"query":"{pages{list{id path}}}"}"#).send()
+                .and_then(|response| response.text()).ok()
+                .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
+                .map(|response| response["data"]["pages"]["list"].is_array())
+                .unwrap_or(false);
+            if ready { break; }
+            if Instant::now() >= deadline { return Err("Wiki authenticated readiness timed out".into()); }
+            std::thread::sleep(Duration::from_millis(300));
+        }
         Ok(())
     }
 
@@ -282,11 +295,8 @@ impl Services {
             self.bin("decision-backend.jar"), "org.springframework.boot.loader.launch.PropertiesLauncher".into()];
         let base = format!("http://127.0.0.1:{}", self.config.wiki_port);
         let model_key = storage::model_key(&self.config.installation)?;
-        status(shared, "模型", if model_key.is_empty() {
-            "未配置，请在下方填写 DeepSeek API Key"
-        } else {
-            "已配置，实际调用结果见对话"
-        });
+        // Account-level keys live in the backend; the legacy installation key is not its status.
+        status(shared, "模型", "按账号配置，请在应用设置中查看");
         let static_root = reqwest::Url::from_directory_path(self.runtime.join("web"))
             .map_err(|_| "无法解析前端资源目录")?.to_string();
         let env = [
