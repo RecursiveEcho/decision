@@ -10,8 +10,10 @@ from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
+import os
 from pathlib import Path
 import secrets
+import signal
 import tempfile
 import threading
 import time
@@ -58,7 +60,7 @@ class API:
 
 
 def provider(stack):
-    state = {"requests": 0, "disconnected": 0, "mode": "ok"}
+    state = {"requests": 0, "disconnected": 0, "mode": "ok", "credentials": []}
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -77,6 +79,13 @@ def provider(stack):
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
             state["requests"] += 1
+            credential = self.headers.get("Authorization", "")
+            state["credentials"].append(credential)
+            if credential != "Bearer synthetic-product-key":
+                self.send_response(401)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if state["mode"] == "fail":
                 self.send_response(503)
                 self.send_header("Content-Length", "0")
@@ -85,10 +94,19 @@ def provider(stack):
             prompt = json.dumps(payload.get("messages", []), ensure_ascii=False)
             slow = "SLOW_ACCEPTANCE" in prompt
             content = "[合成HTTP替身] 已逐步读取输入，保留来源并给出可验证的回答。"
+            content += '\n引号 "正确"、反斜杠 \\、emoji 🧭。'
             if slow:
                 content += "这是一段用于停止测试的合成内容。" * 180
-            answer = json.dumps({"content": content, "evidence": [], "uncertainties": [],
-                                 "conversationTitle": "合成流式验收"}, ensure_ascii=True)
+            result = {"content": content, "evidence": [], "uncertainties": [],
+                      "conversationTitle": "合成流式验收"}
+            if "SIDE_EFFECT_ACCEPTANCE" in prompt:
+                result.update({
+                    "memoryActions": [{"action": "ADD", "scope": "global",
+                        "content": "我的长期偏好是合成青色", "sourceQuote": "我的长期偏好是合成青色"}],
+                    "decisionCandidate": {"choice": "采用合成方案甲", "quote": "我决定采用合成方案甲"},
+                    "suggestKnowledge": True,
+                })
+            answer = json.dumps(result, ensure_ascii=True)
             if not payload.get("stream"):
                 body = json.dumps({"choices": [{"message": {"content": answer}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 10, "completion_tokens": 10}}).encode()
@@ -103,7 +121,7 @@ def provider(stack):
             self.send_header("Connection", "close")
             self.end_headers()
             try:
-                # Deliberately split JSON escapes and Chinese code points at awkward boundaries.
+                # Split JSON Unicode escapes, surrogate pairs and backslashes across SSE deltas.
                 for offset in range(0, len(answer), 13):
                     data = {"choices": [{"delta": {"content": answer[offset:offset + 13]},
                                          "finish_reason": None}]}
@@ -161,7 +179,7 @@ def exercise(api, state):
                    "Central memory must remain disconnected.")
     configured = api.request("/settings/model", {"provider": "deepseek", "model": "synthetic-stream-model",
         "apiKey": "synthetic-product-key"}, method="PUT")
-    native.require(configured["configured"] and "apiKey" not in json.dumps(configured),
+    native.require(configured["configured"] and "synthetic-product-key" not in json.dumps(configured),
                    "Model settings returned credential material.")
     native.require(api.request("/settings/model/test", {"provider": "deepseek",
         "model": "synthetic-stream-model"})["ok"], "Model test did not run.")
@@ -176,15 +194,31 @@ def exercise(api, state):
     native.require(all(item["id"] > first["nextCursor"] for item in resumed["items"]), "Cursor replay duplicated events.")
     messages = api.request(f"/problems/{problem}/messages")["items"]
     native.require(len(messages) == 2 and "逐步读取" in messages[-1]["content"], "Streaming lost decoded content.")
+    all_events = api.request(f"/jobs/{job}/events?after=0")
+    joined = "".join(item["data"]["text"] for item in all_events["items"] if item["type"] == "delta")
+    native.require(joined == all_events["job"]["partialContent"] == messages[-1]["content"],
+                   "Delta replay, snapshot and final response disagree.")
+    native.require("🧭" in joined and '"正确"' in joined and "\\" in joined, "Streaming damaged escaped content.")
+    native.require(api.request(f"/jobs/{job}/events?after=0") == all_events, "Terminal event replay is unstable.")
     api.request(f"/problems/{problem}", {"pinned": True, "group": "合成验收", "title": "SEARCH_ACCEPTANCE"}, method="PATCH")
     found = api.request("/conversations/search?q=STREAM_ACCEPTANCE")["items"]
     native.require(any(row["problem"]["id"] == problem and row["messageId"] for row in found), "Body search cannot locate message.")
     print("PASS: true SSE increments before completion, event cursor recovery, pin/group and message search.", flush=True)
 
     baseline_memory = api.request("/memories")["items"]
-    slow = api.request("/conversations", {"content": "SLOW_ACCEPTANCE 合成停止任务", "thinking": "off"}, expected=202)
+    statement = "SIDE_EFFECT_ACCEPTANCE。我的长期偏好是合成青色。我决定采用合成方案甲。"
+    baseline_decisions = api.request("/decisions")["items"]
+    slow = api.request("/conversations", {"content": "SLOW_ACCEPTANCE。" + statement, "thinking": "off"}, expected=202)
     slow_id, slow_problem = slow["job"]["id"], slow["problem"]["id"]
     partial(api, slow_id)
+    calls_before_queue = state["requests"]
+    queued = api.request("/conversations", {"content": "QUEUED_ACCEPTANCE", "thinking": "off"}, expected=202)
+    native.require(queued["job"]["status"] == "queued", "Second conversation was not queued behind active work.")
+    active = api.request("/jobs?kind=chat&status=active")["items"]
+    native.require({slow_id, queued["job"]["id"]}.issubset({row["id"] for row in active}), "Active discovery lost a conversation.")
+    api.request(f"/jobs/{queued['job']['id']}/cancel", {})
+    terminal(api, queued["job"]["id"], "cancelled")
+    native.require(state["requests"] == calls_before_queue, "Cancelled queued job called the provider.")
     api.request(f"/problems/{slow_problem}/messages", {"content": "不应该产生的新消息"}, expected=409)
     api.request(f"/jobs/{slow_id}/cancel", {})
     stopped = terminal(api, slow_id, "cancelled")
@@ -192,7 +226,15 @@ def exercise(api, state):
     native.wait_until("provider connection closed", None, lambda: state["disconnected"] > 0, timeout=10)
     native.require(len(api.request(f"/problems/{slow_problem}/messages")["items"]) == 1, "Cancelled job wrote a late answer.")
     native.require(api.request("/memories")["items"] == baseline_memory, "Cancelled job changed memory.")
-    print("PASS: same-chat collision rejected, real upstream socket closed, partial retained, no late answer/memory.", flush=True)
+    native.require(api.request("/decisions")["items"] == baseline_decisions, "Cancelled job recorded a decision.")
+    native.require(not api.request(f"/knowledge-proposals?problemId={slow_problem}")["items"], "Cancelled job proposed knowledge.")
+    control = api.request("/conversations", {"content": statement, "thinking": "off"}, expected=202)
+    terminal(api, control["job"]["id"])
+    native.require(len(api.request("/memories")["items"]) > len(baseline_memory), "Positive control did not save the valid synthetic fact.")
+    native.require(len(api.request("/decisions")["items"]) > len(baseline_decisions), "Positive control did not capture the explicit decision.")
+    ended = api.request(f"/jobs/{control['job']['id']}/cancel", {})
+    native.require(ended["status"] == "succeeded", "Cancel after success lied about its outcome.")
+    print("PASS: same-chat collision, upstream close, partial retention, no cancelled side effects; positive control saved fact/decision.", flush=True)
 
     state["mode"] = "fail"
     document = base64.b64encode(b"Synthetic attachment survives transport failure.").decode()
@@ -236,14 +278,30 @@ def main():
         sandbox = native.Sandbox(args.runtime.resolve(strict=True), directory, stack)
         password, owner = secrets.token_hex(24), secrets.token_hex(24)
         sandbox.start_pg([("decision", "decision_app", password)])
-        sandbox.start_java(password, owner, SimpleNamespace(base=""), "", model_env={
+        model_env = {
             "APP_MOCK_MODE": "false", "DEEPSEEK_API_KEY": "synthetic-product-key",
             "DEEPSEEK_BASE_URL": f"http://127.0.0.1:{server.server_port}",
             "DEEPSEEK_MODEL": "synthetic-stream-model",
-        })
+            "APP_TOKEN_SECRET": secrets.token_hex(32),
+        }
+        sandbox.start_java(password, owner, SimpleNamespace(base=""), "", model_env=model_env)
         api = API(f"http://127.0.0.1:{sandbox.api}/api/v1")
         api.login({"accessCode": owner})
         exercise(api, state)
+        interrupted = api.request("/conversations", {"content": "SLOW_ACCEPTANCE RESTART_ACCEPTANCE", "thinking": "off"}, expected=202)
+        before = partial(api, interrupted["job"]["id"])
+        os.killpg(sandbox.java_process.pid, signal.SIGKILL)
+        sandbox.java_process.wait(timeout=10)
+        calls_at_restart = state["requests"]
+        sandbox.start_java(password, owner, SimpleNamespace(base=""), "", model_env=model_env)
+        api.login({"accessCode": owner})
+        recovered = terminal(api, interrupted["job"]["id"], "failed")
+        native.require((recovered.get("error") or {}).get("code") == "PROCESS_RESTARTED", "Interrupted job lacks restart explanation.")
+        native.require(recovered.get("partialContent", "").startswith(before["job"]["partialContent"]), "Restart lost committed partial content.")
+        native.require(api.request("/conversations/search?q=SEARCH_ACCEPTANCE")["items"], "Restart lost searchable history.")
+        native.require(api.request("/settings/model")["configured"], "Restart lost encrypted model configuration.")
+        native.require(state["requests"] == calls_at_restart, "Restart automatically replayed interrupted inference.")
+        print("PASS: actual Java process kill/restart, re-login, partial/terminal recovery and persisted model/history.", flush=True)
         if args.serve:
             info = directory / "ui-session.json"
             info.write_text(json.dumps({"base": api.base.removesuffix("/api/v1"), "owner": owner,

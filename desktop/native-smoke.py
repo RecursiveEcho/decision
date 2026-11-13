@@ -160,8 +160,9 @@ class Sandbox:
     def start_java(self, db_password, owner_code, wiki_client, wiki_token, *, model_env=None):
         key = secrets.token_hex(32)
         self.challenge_key = key
+        self.java_starts = getattr(self, "java_starts", 0) + 1
         process = self.launch(
-            "java",
+            "java" if self.java_starts == 1 else f"java-{self.java_starts}",
             [self.runtime / "java/bin/java", "-Djava.io.tmpdir=" + self.env["TMPDIR"],
              "-Dloader.path=" + str(self.runtime / "decision-desktop.jar"),
              "-cp", self.runtime / "decision-backend.jar",
@@ -181,6 +182,7 @@ class Sandbox:
                 **(model_env or {}),
             },
         )
+        self.java_process = process
         client = Client(f"http://127.0.0.1:{self.api}/api/v1", owner_code)
         base = client.base.removesuffix("/api/v1")
         challenge = secrets.token_hex(32)

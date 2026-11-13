@@ -35,6 +35,7 @@
 - 上游流式JSON如果保留结构化响应，增量仅解码content字段；末尾完整校验成功后才提交引用、记忆、决定和知识操作。停止/失败的partialContent只是未完成答复，不作为事实。
 - `POST /jobs/{id}/cancel`，`{}`+幂等键 → 200 Job。queued/running可取消；终态返回当前状态不伪称取消成功。必须中止/关闭上游等待，服务端终态和副作用提交在同一串行化边界竞争。保留partialContent，停止后不得迟到写入助手终答、记忆、决定、知识。
 - 失败原retry API保留；cancelled不自动重试，用户可明确重新发送或继续。删除会话取消自有Job并拒绝事件回读，保留既有账号隔离。
+- 如果正常完成与副作用已经提交，cancel返回succeeded，不回滚已成功记录；如果cancel先提交，后续结果不得再写入。进程重启将running标为failed/PROCESS_RESTARTED，保留可回读的partial和事件，不自动重放模型。
 - 同一会话最多一个已接受在途chat；新POST若冲突返回409 `CHAT_IN_PROGRESS`，不会留下新消息/附件。不同会话允许创建Job，worker可维持有界串行处理，显示queued。
 
 ## 排队与恢复
