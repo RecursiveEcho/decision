@@ -1,0 +1,16 @@
+{
+  "productName": "Decision Next",
+  "identifier": "dev.decision.desktop.next",
+  "version": "0.2.0",
+  "app": {
+    "windows": [
+      {
+        "label": "startup",
+        "title": "Decision Next · 运行状态",
+        "width": 680,
+        "height": 580,
+        "resizable": true
+      }
+    ]
+  }
+}

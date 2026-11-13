@@ -118,7 +118,8 @@ fn open_window(app: &AppHandle, shared: &Shared, settings: bool) -> Result<(), S
     let download_origin = address.clone();
     let downloads = app.path().download_dir().map_err(|_| "无法读取下载目录。")?;
     tauri::WebviewWindowBuilder::new(app, "business", WebviewUrl::External(address))
-        .title("Decision Preview · 隔离试用").inner_size(1180.0, 800.0).min_inner_size(420.0, 520.0)
+        .title(format!("{} · 预览版", app.config().product_name.as_deref().unwrap_or("Decision")))
+        .inner_size(1180.0, 800.0).min_inner_size(420.0, 520.0)
         // Vue consumes HTML file drag/drop events and performs its own validation.
         .disable_drag_drop_handler()
         .on_navigation(move |url| {
