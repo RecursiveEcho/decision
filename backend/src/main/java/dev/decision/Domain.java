@@ -15,14 +15,18 @@ class Domain {
   final Auth auth;
   final Attachments attachments;
   final ChatMemory chatMemory;
+  final ModelSettings settings;
+  final RunEvents runs;
 
-  Domain(Store s, Config c, Evidence e, Auth a, Attachments attachments, ChatMemory chatMemory) {
+  Domain(Store s, Config c, Evidence e, Auth a, Attachments attachments, ChatMemory chatMemory, ModelSettings settings, RunEvents runs) {
     this.s = s;
     this.c = c;
     this.evidence = e;
     this.auth = a;
     this.attachments = attachments;
     this.chatMemory = chatMemory;
+    this.settings = settings;
+    this.runs = runs;
   }
 
   ObjectNode problem(JsonNode b) {
@@ -45,16 +49,23 @@ class Domain {
   ObjectNode readProblem(String id) {
     ObjectNode p = s.get("problem", id);
     if (!p.has("status")) p.put("status", "active");
+    if (!p.has("pinned")) p.put("pinned", false);
+    if (!p.has("group")) p.put("group", "");
     return p;
   }
 
   ObjectNode editProblem(String id, JsonNode b) {
     ObjectNode p = readProblem(id);
-    Set<String> fields = Set.of("title", "goal", "constraints", "unknowns", "status");
+    Set<String> fields = Set.of("title", "goal", "constraints", "unknowns", "status", "pinned", "group");
     if (!b.isObject()
         || b.isEmpty()
         || b.properties().stream().anyMatch(field -> !fields.contains(field.getKey())))
       throw new ApiError(400, "INVALID_FIELD", "仅支持修改标题、目标、限制、未知或归档状态");
+    if (b.has("pinned")) {
+      if (!b.path("pinned").isBoolean()) throw new ApiError(400,"INVALID_FIELD","固定状态必须是布尔值");
+      p.set("pinned",b.get("pinned"));
+    }
+    if (b.has("group")) p.put("group", Json.optional(b,"group","",60).strip());
     if (b.has("status")) p.put("status", Json.choice(b, "status", "active", "archived"));
     if (b.has("title")) s.db.update("UPDATE records SET auto_title=false WHERE id=?::uuid", id);
     for (String k : List.of("title", "goal"))
@@ -69,7 +80,7 @@ class Domain {
       throw new ApiError(400, "INVALID_FIELD", "status 只支持 active 或 archived");
     List<ObjectNode> items = s.all("problem", null);
     items.removeIf(p -> !p.path("status").asText("active").equals(status));
-    items.forEach(p -> p.put("status", status));
+    items.forEach(p -> { p.put("status", status); if(!p.has("pinned")) p.put("pinned",false); if(!p.has("group")) p.put("group",""); });
     // Keep existing active-list pagination tokens valid across the upgrade.
     String scope = status.equals("active") ? "problems:null:null" : "problems:null:archived";
     return page(items, "updatedAt", cursor, limit, scope);
@@ -77,6 +88,7 @@ class Domain {
 
   void deleteProblem(String id) {
     s.get("problem", id);
+    var activeJobs = s.db.queryForList("SELECT id::text FROM jobs WHERE problem_id=?::uuid AND account_id=?::uuid AND state IN ('queued','running')", String.class, id, AccountScope.id());
     // Conversation visibility changes under the same write lock as worker commits.
     // Keep independent library records, including their original provenance.
     s.db.update(
@@ -91,6 +103,7 @@ class Domain {
             + " AND state IN ('queued','running')",
         id);
     s.db.update("DELETE FROM analysis_pending WHERE problem_id=?::uuid", id);
+    activeJobs.forEach(runs::signal);
   }
 
   String problemId(JsonNode b) {
@@ -197,11 +210,16 @@ class Domain {
     s.requireCurrentUserMessage(p, input.path("userMessageId").asText());
     input.remove("jobId");
     input.put("retryOfJobId", id);
+    requireNoChat(p);
+    input.put("modelSnapshot",settings.freeze(input));
     return s.job("chat", p, input, c.mode());
   }
 
   ObjectNode chat(String id, JsonNode b, boolean autoTitle) {
     s.get("problem", id);
+    requireNoChat(id);
+    ModelSettings.Profile profile = settings.profile(b);
+    String snapshot = settings.freeze(b);
     String content = Json.optional(b, "content", "", 12000);
     List<Attachments.Upload> uploads = Attachments.validate(b);
     String thinking = Attachments.thinking(b);
@@ -258,8 +276,39 @@ class Domain {
             "thinking",
             thinking,
             "attachmentIds",
-            attachmentIds),
+            attachmentIds,
+            "provider", profile.provider(), "model", profile.model(), "modelSnapshot", snapshot),
         c.mode());
+  }
+
+  void requireNoChat(String id) {
+    if (s.db.queryForObject("SELECT count(*) FROM jobs WHERE account_id=?::uuid AND problem_id=?::uuid AND input->>'operation'='chat' AND state IN ('queued','running')",Integer.class,AccountScope.id(),id)>0)
+      throw new ApiError(409,"CHAT_IN_PROGRESS","这个对话仍有回答在处理中，请排队或等待结束",true);
+  }
+
+  ObjectNode search(String query,String cursor,int limit) {
+    if(query==null || query.strip().isEmpty() || query.length()>200) throw new ApiError(400,"INVALID_QUERY","请输入1至200字的搜索内容");
+    String q=query.strip();
+    var rows=s.db.queryForList("SELECT p.data::text AS problem,NULL::text AS message_id,p.id::text AS id,p.data->>'createdAt' AS date,p.data->>'title' AS text FROM records p WHERE p.account_id=?::uuid AND p.kind='problem' AND NOT p.deleted AND strpos(lower(p.data->>'title'),lower(?))>0 UNION ALL SELECT p.data::text AS problem,m.id::text AS message_id,m.id::text AS id,m.data->>'createdAt' AS date,m.data->>'content' AS text FROM records m JOIN records p ON p.id=m.problem_id AND p.account_id=m.account_id WHERE m.account_id=?::uuid AND m.kind='message' AND NOT m.deleted AND p.kind='problem' AND NOT p.deleted AND strpos(lower(m.data->>'content'),lower(?))>0",AccountScope.id(),q,AccountScope.id(),q);
+    List<ObjectNode> hits=new ArrayList<>();
+    for(var row:rows) {
+      ObjectNode p=(ObjectNode)Json.parse((String)row.get("problem"));
+      p.put("status",p.path("status").asText("active")); p.put("pinned",p.path("pinned").asBoolean()); p.put("group",p.path("group").asText());
+      String text=Objects.toString(row.get("text"),""); int index=text.toLowerCase(Locale.ROOT).indexOf(q.toLowerCase(Locale.ROOT));
+      int from=Math.max(0,index-35),to=Math.min(text.length(),Math.max(index,0)+q.length()+100);
+      String snippet=(from>0?"…":"")+text.substring(from,to)+(to<text.length()?"…":"");
+      hits.add(Json.obj("id",row.get("id"),"problem",p,"messageId",row.get("message_id"),"snippet",snippet,"createdAt",row.get("date")));
+    }
+    ObjectNode page=page(hits,"createdAt",cursor,limit,"search:"+Auth.hash(q));
+    page.path("items").forEach(n -> ((ObjectNode)n).remove("id"));
+    return page;
+  }
+
+  ObjectNode activeJobs(String kind,String status,String cursor,int limit) {
+    if(!"chat".equals(kind) || !"active".equals(status)) throw new ApiError(400,"INVALID_FIELD","任务列表仅支持chat和active");
+    List<ObjectNode> jobs=s.all("job",null);
+    jobs.removeIf(j -> !j.path("kind").asText().equals("chat") || !Set.of("queued","running").contains(j.path("status").asText()));
+    return page(jobs,"createdAt",cursor,limit,"active-chat-jobs");
   }
 
   ObjectNode source(

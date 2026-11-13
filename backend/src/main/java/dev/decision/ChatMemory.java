@@ -10,7 +10,7 @@ import org.springframework.stereotype.Component;
 
 /** Local, source-grounded memory reconciliation. No SDK, embedding service or extra model call. */
 @Component
-class ChatMemory {
+class ChatMemory implements MemoryClient {
   final Store s;
 
   ChatMemory(Store s) {
@@ -34,11 +34,11 @@ class ChatMemory {
     return s.memoryEpoch();
   }
 
-  long currentEpoch() {
+  public long currentEpoch() {
     return epoch();
   }
 
-  void requireCurrent(Snapshot snapshot) {
+  public void requireCurrent(Snapshot snapshot) {
     if (snapshot == null || snapshot.epoch() != epoch())
       throw new ApiError(409, "CONTEXT_CHANGED", "记忆已更正或撤销，请重新提问", true);
     for (JsonNode seen : snapshot.memories()) {
@@ -69,7 +69,7 @@ class ChatMemory {
         problemId);
   }
 
-  Snapshot retrieve(String problemId, String content) {
+  public Snapshot retrieve(String problemId, String content) {
     return s.write(
         () -> {
           Set<String> query = tokens(content);
@@ -115,7 +115,7 @@ class ChatMemory {
         "sourceQuote", memory.path("sourceQuote").asText(""));
   }
 
-  ArrayNode apply(String problemId, String userMessageId, JsonNode actions, Snapshot snapshot) {
+  public ArrayNode apply(String problemId, String userMessageId, JsonNode actions, Snapshot snapshot) {
     return s.write(() -> applyLocked(problemId, userMessageId, actions, snapshot));
   }
 

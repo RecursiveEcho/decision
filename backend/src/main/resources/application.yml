@@ -27,9 +27,9 @@ logging:
 app:
   owner-code: ${APP_OWNER_ACCESS_CODE:}
   token-secret: ${APP_TOKEN_SECRET:}
-  model-key: ${DEEPSEEK_API_KEY:}
-  model-base: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
-  model-name: ${DEEPSEEK_MODEL:deepseek-flash}
+  model-key: ${APP_MODEL_KEY:${DEEPSEEK_API_KEY:}}
+  model-base: ${APP_MODEL_BASE:${DEEPSEEK_BASE_URL:https://api.deepseek.com}}
+  model-name: ${APP_MODEL_NAME:${DEEPSEEK_MODEL:deepseek-flash}}
   mock: ${APP_MOCK_MODE:false}
   wiki-base: ${WIKI_BASE_URL:}
   wiki-token: ${WIKI_ACCESS_TOKEN:}

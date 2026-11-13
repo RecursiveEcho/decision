@@ -19,6 +19,7 @@ class Worker {
   final Evidence evidence;
   final MemoryOverview overview;
   final Knowledge knowledge;
+  final RunEvents runs;
 
   @Value("${app.worker-enabled}")
   boolean enabled;
@@ -33,7 +34,7 @@ class Worker {
       Wiki wiki,
       Evidence evidence,
       MemoryOverview overview,
-      Knowledge knowledge) {
+      Knowledge knowledge, RunEvents runs) {
     this.s = s;
     this.c = c;
     this.d = d;
@@ -42,6 +43,7 @@ class Worker {
     this.evidence = evidence;
     this.overview = overview;
     this.knowledge = knowledge;
+    this.runs = runs;
   }
 
   @EventListener(ApplicationReadyEvent.class)
@@ -112,7 +114,8 @@ class Worker {
   }
 
   private void process(ObjectNode work) {
-    try {
+    try (RunEvents.Active active = runs.activate(work)) {
+      runs.check();
       switch (work.path("operation").asText()) {
         case "ingest" -> ingest(work);
         case "chat" -> chat(work);
@@ -169,6 +172,7 @@ class Worker {
     job.putNull("error");
     s.save("job", job);
     s.db.update("UPDATE jobs SET state='succeeded' WHERE id=?::uuid", id);
+    if(job.path("kind").asText().equals("chat")) runs.emit(id,"terminal",Json.obj("status","succeeded"));
   }
 
   void fail(String id, ApiError error) {
@@ -184,6 +188,7 @@ class Worker {
     job.set("error", error.detail());
     s.save("job", job);
     s.db.update("UPDATE jobs SET state='failed' WHERE id=?::uuid", id);
+    if(job.path("kind").asText().equals("chat")) runs.emit(id,"terminal",Json.obj("status","failed"));
   }
 
   void current(Model.Context ctx) {
@@ -273,9 +278,17 @@ class Worker {
 
   void chat(ObjectNode work) {
     String p = work.path("problemId").asText();
+    String jobId = work.path("jobId").asText();
+    runs.stage(jobId,"attachments","正在读取附件");
     d.attachments.process(work);
+    runs.check();
+    runs.stage(jobId,"context","正在整理对话与记忆");
     Model.Context ctx = model.context(p, work);
+    runs.check();
+    runs.stage(jobId,"generating","正在生成回答");
     ObjectNode response = model.call(ctx, false);
+    runs.check();
+    runs.stage(jobId,"validating","正在核验并保存回答");
     s.write(
         () -> {
           s.get("problem", p);
@@ -342,6 +355,8 @@ class Worker {
                       work.path("thinking").asText("off"),
                       "attachments",
                       Json.arr()));
+          assistant.put("provider", runs.profile().provider());
+          assistant.put("model", runs.profile().model());
           if (!memoryChanges.isEmpty()) assistant.set("memoryChanges", memoryChanges);
           if (decisionRecord != null) assistant.set("decisionRecord", decisionRecord);
           long replyEpoch = d.chatMemory.currentEpoch();

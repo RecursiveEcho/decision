@@ -10,20 +10,24 @@ class Model {
   final Config c;
   final Store s;
   final Attachments attachments;
-  final ChatMemory chatMemory;
+  final MemoryClient chatMemory;
+  final ModelSettings settings;
+  final RunEvents runs;
   final DecisionCapture decisions;
 
   Model(
       Config c,
       Store s,
       Attachments attachments,
-      ChatMemory chatMemory,
-      DecisionCapture decisions) {
+      MemoryClient chatMemory,
+      DecisionCapture decisions, ModelSettings settings, RunEvents runs) {
     this.c = c;
     this.s = s;
     this.attachments = attachments;
     this.chatMemory = chatMemory;
     this.decisions = decisions;
+    this.settings = settings;
+    this.runs = runs;
   }
 
   record Context(
@@ -149,7 +153,7 @@ class Model {
               Json.arr(),
               "uncertainties",
               Json.arr().add("测试模式不提供实际建议"));
-    if (!c.modelConfigured())
+    if (runs.profile().key().isBlank())
       throw new ApiError(503, "MODEL_NOT_CONFIGURED", "DeepSeek 尚未配置，资料已保存；请配置服务端密钥后重试");
     String base =
         "你是个人决策讨论助手。JSON"
@@ -245,7 +249,7 @@ class Model {
 
   ObjectNode overview(String problemId, ObjectNode input) {
     if (c.mock) throw new ApiError(503, "OVERVIEW_UNAVAILABLE", "测试模式不生成个人记忆概览");
-    if (!c.modelConfigured())
+    if (runs.profile().key().isBlank())
       throw new ApiError(503, "MODEL_NOT_CONFIGURED", "模型尚未配置；配置后可明确重试，全部原始记忆仍可查看", true);
     String prompt =
         "你是个人记忆页面的摘要编辑。只输出JSON对象{items:[{summary,scope,problemId,memoryRefs:[{id,revision}]}]}。"
@@ -280,7 +284,7 @@ class Model {
 
   ObjectNode knowledge(String problemId, ObjectNode input) {
     if (c.mock) throw new ApiError(503, "KNOWLEDGE_UNAVAILABLE", "测试模式不生成正式知识提案");
-    if (!c.modelConfigured())
+    if (runs.profile().key().isBlank())
       throw new ApiError(503, "MODEL_NOT_CONFIGURED", "模型尚未配置；对话仍保留，配置后可重新整理", true);
     String prompt =
         "你是个人知识库整理助手。只输出一个JSON对象，完整字段为"
@@ -322,13 +326,22 @@ class Model {
     JsonNode response = null;
     String raw = "", type = "unavailable";
     try {
-      response =
-          Upstream.post(
-              c.modelBase.replaceAll("/+$", "") + "/chat/completions",
-              c.modelKey,
-              payload,
-              java.time.Duration.ofSeconds(seconds),
-              maxBytes);
+      ModelSettings.Profile profile = runs.profile();
+      ModelSettings.adapt(payload, profile);
+      if (operation.equals("chat") && runs.current() != null) {
+        RunEvents.Active run = runs.current();
+        payload.put("stream", true);
+        payload.set("stream_options", Json.obj("include_usage", true));
+        JsonContentStream decoder = new JsonContentStream(run::delta);
+        try {
+          response = Upstream.stream(profile.base() + "/chat/completions", profile.key(), payload,
+              java.time.Duration.ofSeconds(seconds), maxBytes, decoder::accept, run.cancellation,
+              () -> runs.stage(run.id, "buffered_response", "模型返回完整响应，等待校验"));
+        } finally { run.flush(); }
+      } else {
+        response = Upstream.post(profile.base() + "/chat/completions", profile.key(), payload,
+            java.time.Duration.ofSeconds(seconds), maxBytes);
+      }
       JsonNode choice = response.path("choices").path(0);
       raw = choice.path("message").path("content").asText("");
       String finish = choice.path("finish_reason").asText("");
