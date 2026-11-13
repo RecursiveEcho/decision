@@ -25,3 +25,5 @@ backups/
 **/.pytest_cache/
 **/.DS_Store
 **/project.private.config.json
+output/playwright/
+.playwright-cli/

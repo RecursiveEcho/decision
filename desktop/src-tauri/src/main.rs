@@ -102,13 +102,18 @@ fn show(app: &AppHandle, label: &str) {
     }
 }
 
-fn open_window(app: &AppHandle, shared: &Shared) -> Result<(), String> {
+fn open_window(app: &AppHandle, shared: &Shared, settings: bool) -> Result<(), String> {
     let origin = shared.0.lock().unwrap().origin.clone().ok_or("核心服务尚未就绪。")?;
-    if app.get_webview_window("business").is_some() {
+    if let Some(window) = app.get_webview_window("business") {
         show(app, "business");
+        if settings {
+            window.eval("window.dispatchEvent(new Event('decision-open-settings'))")
+                .map_err(|_| "无法打开设置，请使用侧栏的设置入口。")?;
+        }
         return Ok(());
     }
-    let address: tauri::Url = origin.parse().map_err(|_| "本机地址无效。")?;
+    let mut address: tauri::Url = origin.parse().map_err(|_| "本机地址无效。")?;
+    if settings { address.set_query(Some("settings=1")); }
     let allowed = address.clone();
     let download_origin = address.clone();
     let downloads = app.path().download_dir().map_err(|_| "无法读取下载目录。")?;
@@ -148,7 +153,13 @@ fn open_window(app: &AppHandle, shared: &Shared) -> Result<(), String> {
 #[tauri::command]
 fn open_business(window: WebviewWindow, app: AppHandle, shared: tauri::State<Shared>) -> Result<(), String> {
     startup_only(&window)?;
-    open_window(&app, &shared)
+    open_window(&app, &shared, false)
+}
+
+#[tauri::command]
+fn open_settings(window: WebviewWindow, app: AppHandle, shared: tauri::State<Shared>) -> Result<(), String> {
+    startup_only(&window)?;
+    open_window(&app, &shared, true)
 }
 
 fn worker(app: AppHandle, shared: Shared, actions: mpsc::Receiver<Action>) {
@@ -200,7 +211,7 @@ fn worker(app: AppHandle, shared: Shared, actions: mpsc::Receiver<Action>) {
                             state.ready = true;
                         }
                         running = Some(services);
-                        match open_window(&app, &shared) {
+                        match open_window(&app, &shared, false) {
                             Ok(()) => {
                                 if !degraded {
                                     if let Some(window) = app.get_webview_window("startup") { let _ = window.hide(); }
@@ -255,12 +266,13 @@ fn main() {
             trace_window(app, "second_instance_reopened");
         }))
         .manage(shared.clone())
-        .invoke_handler(tauri::generate_handler![desktop_status, retry_start, owner_code, save_model_key, open_business, open_logs])
+        .invoke_handler(tauri::generate_handler![desktop_status, retry_start, owner_code, save_model_key, open_business, open_settings, open_logs])
         .setup(move |app| {
             use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-            let settings = MenuItem::with_id(app, "settings", "运行状态与设置", true, None::<&str>)?;
+            let settings = MenuItem::with_id(app, "settings", "设置…", true, Some("CmdOrCtrl+,"))?;
+            let status = MenuItem::with_id(app, "status", "运行状态与诊断", true, None::<&str>)?;
             let quit = PredefinedMenuItem::quit(app, None)?;
-            let submenu = Submenu::with_items(app, "Decision Preview", true, &[&settings, &quit])?;
+            let submenu = Submenu::with_items(app, "Decision Preview", true, &[&settings, &status, &quit])?;
             let edit = Submenu::with_items(app, "编辑", true, &[
                 &PredefinedMenuItem::undo(app, None)?, &PredefinedMenuItem::redo(app, None)?,
                 &PredefinedMenuItem::cut(app, None)?, &PredefinedMenuItem::copy(app, None)?,
@@ -275,7 +287,11 @@ fn main() {
             Ok(())
         })
         .on_menu_event(|app, event| {
-            if event.id().as_ref() == "settings" { show(app, "startup"); }
+            if event.id().as_ref() == "settings" {
+                let shared = app.state::<Shared>();
+                if open_window(app, &shared, true).is_err() { show(app, "startup"); }
+            }
+            if event.id().as_ref() == "status" { show(app, "startup"); }
             if event.id().as_ref() == "reload" {
                 if let Some(window) = app.get_webview_window("business") {
                     if window.reload().is_ok() { trace_window(app, "business_reloaded"); }

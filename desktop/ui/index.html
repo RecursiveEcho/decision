@@ -9,8 +9,8 @@
 </head>
 <body>
 <main>
-  <h1>Decision Preview</h1>
-  <p>桌面隔离试用环境</p>
+  <h1>Decision</h1>
+  <p>Preview · 运行状态与诊断</p>
   <p id="status" role="status">正在启动本机服务…</p>
   <dl id="services"></dl>
   <div class="actions">
@@ -20,12 +20,11 @@
     <button id="code">查看管理员访问码</button>
   </div>
   <output id="owner-code" hidden></output>
-  <form id="settings">
-    <label for="model-key">DeepSeek API Key</label>
-    <input id="model-key" type="password" autocomplete="off" placeholder="填写后保存在本机钥匙串">
-    <button type="submit">保存，下次启动生效</button>
+  <section aria-label="应用设置">
+    <p>模型、外观、输入偏好和记忆状态已集中到应用设置。登录后可配置自己的 OpenAI 或 DeepSeek 模型。</p>
+    <button id="settings" disabled>打开应用设置</button>
     <p id="saved" role="status"></p>
-  </form>
+  </section>
 </main>
 </body>
 </html>

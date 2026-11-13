@@ -223,9 +223,14 @@ class Sandbox:
             raise RuntimeError("Malformed readiness challenge was accepted.")
         print("PASS: Java-served Vue, origin guard, API authentication and readiness proof.",
               flush=True)
-        require(self.sql("decision_app", "decision", db_password,
-                         "SELECT count(*) FROM flyway_schema_history WHERE success;") == "9",
-                "Flyway did not apply all nine migrations.")
+        expected_versions = sorted(
+            path.name.split("__", 1)[0][1:]
+            for path in (ROOT / "backend/src/main/resources/db/migration").glob("V*__*.sql")
+        )
+        applied_versions = sorted(self.sql("decision_app", "decision", db_password,
+            "SELECT version FROM flyway_schema_history WHERE success AND version IS NOT NULL;").splitlines())
+        require(applied_versions == expected_versions,
+                "Flyway migrations do not match this checkout's schema.")
         return client
 
 
