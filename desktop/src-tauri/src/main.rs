@@ -107,7 +107,8 @@ fn open_window(app: &AppHandle, shared: &Shared, settings: bool) -> Result<(), S
     if let Some(window) = app.get_webview_window("business") {
         show(app, "business");
         if settings {
-            window.eval("window.dispatchEvent(new Event('decision-open-settings'))")
+            // Keep the intent across the login screen, where the settings component is not mounted.
+            window.eval("{const u=new URL(location.href);u.searchParams.set('settings','1');history.replaceState(history.state,'',u);window.dispatchEvent(new Event('decision-open-settings'));}")
                 .map_err(|_| "无法打开设置，请使用侧栏的设置入口。")?;
         }
         return Ok(());
