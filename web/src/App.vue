@@ -143,6 +143,7 @@ async function openConversation(id: string) {
     restoreScroll();
     if (
       messages.value.at(-1)?.knowledgeSuggestion?.jobId &&
+      readWorkspace().scroll?.[id] === undefined &&
       interaction === scrollInteraction &&
       mainPane.value
     )
@@ -234,6 +235,7 @@ function dropAttachments(event: DragEvent) {
 function chooseThinking(value: Thinking) {
   try {
     chat.setThinking(draftTarget.value, value);
+    normalizeModelThinking();
     thinkingOpen.value = false;
   } catch (failure) {
     error.value =
@@ -453,6 +455,9 @@ function ended() {
   goalDraft.value = "";
   chat.clear();
   findOpen.value = false;
+  defaultModel.value = { provider: "", model: "", configured: false };
+  conversationProvider.value = "deepseek";
+  conversationModel.value = "";
   clearData();
   sourceDetail.value = null;
   chosenSources.value = [];
@@ -676,6 +681,7 @@ async function send() {
     chat.preparing.value
   )
     return;
+  normalizeModelThinking();
   thinkingOpen.value = false;
   error.value = "";
   const current = sessionId();
@@ -825,9 +831,26 @@ async function refreshModel() {
   const current = sessionId();
   try {
     const value = await request<typeof defaultModel.value>("/settings/model");
-    if (current === sessionId()) defaultModel.value = value;
+    if (current === sessionId()) {
+      defaultModel.value = value;
+      normalizeModelThinking();
+    }
   } catch {
     /* Settings presents the actionable error. */
+  }
+}
+function normalizeModelThinking() {
+  const selection = chat.models.value[draftTarget.value] || {};
+  const provider = selection.provider || defaultModel.value.provider;
+  const model = selection.model || defaultModel.value.model;
+  if (
+    provider === "openai" &&
+    /^(gpt-4|gpt-3\.5|chatgpt-4)/i.test(model) &&
+    selectedThinking.value !== "off"
+  ) {
+    chat.setThinking(draftTarget.value, "off");
+    note.value =
+      "这个模型不支持思考档位，已切换为普通回答。可在模型设置中选择推理模型。";
   }
 }
 function useConversationModel() {
@@ -840,6 +863,7 @@ function useConversationModel() {
         }
       : {},
   );
+  normalizeModelThinking();
 }
 async function copyMessage(id: string, content: string) {
   try {
@@ -1507,8 +1531,16 @@ onUnmounted(() => {
                 </details>
                 <button
                   class="send-button"
-                  :aria-label="pendingChat ? '加入待发送队列' : '发送'"
-                  :title="pendingChat ? '加入本机待发送队列' : '发送'"
+                  :aria-label="
+                    pendingChat || currentQueue.length
+                      ? '加入待发送队列'
+                      : '发送'
+                  "
+                  :title="
+                    pendingChat || currentQueue.length
+                      ? '加入本机待发送队列'
+                      : '发送'
+                  "
                   :disabled="
                     busy ||
                     chat.preparing.value ||

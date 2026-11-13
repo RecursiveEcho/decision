@@ -14,7 +14,7 @@ import {
   Monitor,
 } from "@lucide/vue";
 import { request, sessionId } from "./api";
-import { preferences, savePreferences, resetPreferences } from "./preferences";
+import { preferences, savePreferences } from "./preferences";
 import {
   accent,
   appearanceError,
@@ -332,7 +332,12 @@ defineExpose({ open });
             @click="
               () => {
                 try {
-                  resetPreferences();
+                  Object.assign(preferences, {
+                    fontSize: 15,
+                    density: 'comfortable',
+                    sidebarWidth: 260,
+                  });
+                  savePreferences();
                   setAppearance('system', 'graphite');
                 } catch {
                   error = '本机设置未能保存。';

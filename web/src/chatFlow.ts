@@ -43,6 +43,8 @@ export function useChatFlow(callbacks: {
     disposed = false;
   const observers = new Set<string>();
   const sends = new Set<string>();
+  const draftRevisions = new Map<string, number>();
+  const fileOperations = new Set<{ target: string }>();
   const validOwner = () =>
     !disposed && !!owner && owner === accountId() && epoch === sessionId();
   const active = (p: PendingChat) =>
@@ -55,6 +57,7 @@ export function useChatFlow(callbacks: {
     if (!validOwner()) throw new ApiError("已退出登录，停止等待请求。", 499);
     writeChatSession({
       owner,
+      unread: unread.value,
       drafts: drafts.value,
       pending: pending.value,
       pendings: pendings.value,
@@ -66,13 +69,17 @@ export function useChatFlow(callbacks: {
   }
   function setTarget(id: string) {
     target.value = id || "new";
-    delete unread.value[target.value];
+    if (unread.value[target.value]) {
+      delete unread.value[target.value];
+      if (validOwner()) save();
+    }
   }
   function restore() {
     owner = accountId();
     epoch = sessionId();
     disposed = false;
     const value = readChatSession(owner);
+    unread.value = value.unread || {};
     drafts.value = value.drafts;
     files.value = value.files || {};
     thinking.value = value.thinking || {};
@@ -111,6 +118,8 @@ export function useChatFlow(callbacks: {
       current = files.value[id] || [];
     checkFileLimits([...current, ...incoming]);
     preparing.value = true;
+    const operation = { target: id };
+    fileOperations.add(operation);
     try {
       const prepared: StoredFile[] = [];
       for (const file of incoming) {
@@ -118,7 +127,7 @@ export function useChatFlow(callbacks: {
         if (!validOwner() || epoch !== capturedEpoch)
           throw new ApiError("会话已结束。", 499);
       }
-      checkFileLimits([...current, ...prepared]);
+      checkFileLimits([...(files.value[operation.target] || []), ...prepared]);
       for (const file of prepared)
         await putMedia(
           owner,
@@ -128,9 +137,13 @@ export function useChatFlow(callbacks: {
           () => validOwner() && epoch === capturedEpoch,
         );
       if (!validOwner() || epoch !== capturedEpoch) return;
-      files.value[id] = [...current, ...prepared.map(localMetadata)];
+      files.value[operation.target] = [
+        ...(files.value[operation.target] || []),
+        ...prepared.map(localMetadata),
+      ];
       save();
     } finally {
+      fileOperations.delete(operation);
       if (epoch === capturedEpoch) preparing.value = false;
     }
   }
@@ -149,10 +162,12 @@ export function useChatFlow(callbacks: {
     save();
   }
   function setDraft(id: string, value: string) {
+    draftRevisions.set(id, (draftRevisions.get(id) || 0) + 1);
     drafts.value[id] = value;
     save();
   }
   function discardDraft(id: string) {
+    draftRevisions.set(id, (draftRevisions.get(id) || 0) + 1);
     const ids = (files.value[id] || []).map((f) => f.id);
     delete drafts.value[id];
     delete files.value[id];
@@ -172,6 +187,11 @@ export function useChatFlow(callbacks: {
   function clear() {
     owner = "";
     epoch = "";
+    preparing.value = false;
+    pausedQueues.value = {};
+    target.value = "new";
+    draftRevisions.clear();
+    fileOperations.clear();
     pendings.value = {};
     queues.value = {};
     drafts.value = {};
@@ -197,9 +217,11 @@ export function useChatFlow(callbacks: {
     }
   }
   async function observe(p: PendingChat, reload = false) {
-    if (!p.job || !active(p) || observers.has(p.job.id)) return;
-    const jobId = p.job.id;
-    observers.add(jobId);
+    if (!p.job || !active(p)) return;
+    const jobId = p.job.id,
+      observation = epoch + ":" + p.job.id;
+    if (observers.has(observation)) return;
+    observers.add(observation);
     try {
       if (reload) {
         const fresh = await request<Job>(`/jobs/${jobId}`);
@@ -261,7 +283,7 @@ export function useChatFlow(callbacks: {
       }
       throw e;
     } finally {
-      observers.delete(jobId);
+      observers.delete(observation);
     }
   }
   async function perform(p: PendingChat) {
@@ -297,8 +319,17 @@ export function useChatFlow(callbacks: {
         p.job = result.job;
         pendings.value[p.problemId] = p;
         if (sourceTarget === "new") {
+          for (const operation of fileOperations)
+            if (operation.target === sourceTarget)
+              operation.target = p.problemId;
           drafts.value[p.problemId] = drafts.value.new || "";
           files.value[p.problemId] = files.value.new || [];
+          thinking.value[p.problemId] =
+            thinking.value.new || p.thinking || "off";
+          models.value[p.problemId] = models.value.new || {
+            provider: op.body.provider,
+            model: op.body.model,
+          };
           delete drafts.value.new;
           delete files.value.new;
         }
@@ -307,13 +338,6 @@ export function useChatFlow(callbacks: {
       } else {
         p.job = result;
         callbacks.accepted(p.problemId!, undefined, sourceTarget);
-      }
-      if (p.problemId) {
-        thinking.value[p.problemId] = p.thinking || "off";
-        models.value[p.problemId] = {
-          provider: op.body.provider,
-          model: op.body.model,
-        };
       }
       p.operation = undefined;
       p.state = "waiting";
@@ -339,10 +363,14 @@ export function useChatFlow(callbacks: {
   async function snapshot(
     targetId: string | null,
     sourceIds: string[],
-  ): Promise<PendingChat> {
+  ): Promise<{ pending: PendingChat; revision: number }> {
     const id = targetId || "new",
       content = drafts.value[id] || "",
       selectedFiles = [...(files.value[id] || [])],
+      selectedThinking = thinking.value[id] || "off",
+      selectedModel = { ...models.value[id] },
+      selectedSources = [...sourceIds],
+      revision = draftRevisions.get(id) || 0,
       key = crypto.randomUUID();
     if ((!content.trim() && !selectedFiles.length) || content.length > 12000)
       throw new Error("请写一句想聊的话，最多12000字。");
@@ -372,24 +400,35 @@ export function useChatFlow(callbacks: {
     if (!validOwner() || epoch !== capturedEpoch)
       throw new ApiError("会话已结束。", 499);
     return {
-      content,
-      files: selectedFiles,
-      thinking: thinking.value[id] || "off",
-      ...(selectedFiles.length ? { mediaKey: key } : {}),
-      problemId: targetId,
-      state: "sending",
-      operation: {
-        path: targetId ? `/problems/${targetId}/messages` : "/conversations",
-        key,
-        ...(selectedFiles.length ? { attachmentSnapshotKey: key } : {}),
-        body: {
-          content,
-          ...(targetId ? { sourceIds: [...sourceIds] } : {}),
-          thinking: thinking.value[id] || "off",
-          ...models.value[id],
+      revision,
+      pending: {
+        content,
+        files: selectedFiles,
+        thinking: selectedThinking,
+        ...(selectedFiles.length ? { mediaKey: key } : {}),
+        problemId: targetId,
+        state: "sending",
+        operation: {
+          path: targetId ? `/problems/${targetId}/messages` : "/conversations",
+          key,
+          ...(selectedFiles.length ? { attachmentSnapshotKey: key } : {}),
+          body: {
+            content,
+            ...(targetId ? { sourceIds: selectedSources } : {}),
+            thinking: selectedThinking,
+            ...selectedModel,
+          },
         },
       },
     };
+  }
+  function consumeSnapshot(id: string, p: PendingChat, revision: number) {
+    if ((draftRevisions.get(id) || 0) === revision) drafts.value[id] = "";
+    const consumed = new Set((p.files || []).map((f) => f.id));
+    files.value[id] = (files.value[id] || []).filter(
+      (f) => !consumed.has(f.id),
+    );
+    save();
   }
   async function send(
     targetId: string | null,
@@ -402,29 +441,27 @@ export function useChatFlow(callbacks: {
     if (pendings.value[id] && !allowQueue)
       throw new Error("上一段话还在处理中，请先恢复或重试回答。");
     sends.add(id);
+    const sendingEpoch = epoch;
     let p: PendingChat;
     try {
-      p = await snapshot(targetId, sourceIds);
-      if (pendings.value[id]) {
+      const captured = await snapshot(targetId, sourceIds);
+      p = captured.pending;
+      if (pendings.value[id] || queues.value[id]?.length) {
         if (!targetId) throw new Error("首条消息尚未创建对话，请稍后排队。");
         if ((queues.value[id] || []).length >= 20)
           throw new Error("本机会话队列最多20条。");
         p.state = "queued";
         (queues.value[id] ||= []).push(p);
         save();
-        drafts.value[id] = "";
-        files.value[id] = [];
-        save();
+        consumeSnapshot(id, p, captured.revision);
         return;
       }
       pendings.value[id] = p;
       save();
-      drafts.value[id] = "";
-      files.value[id] = [];
-      save();
+      consumeSnapshot(id, p, captured.revision);
       p = pendings.value[id];
     } finally {
-      sends.delete(id);
+      if (epoch === sendingEpoch) sends.delete(id);
     }
     return perform(p!);
   }

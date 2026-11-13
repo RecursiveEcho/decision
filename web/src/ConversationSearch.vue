@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref } from "vue";
+import { nextTick, onUnmounted, ref, watch } from "vue";
 import { Search, X } from "@lucide/vue";
 import { request, sessionId } from "./api";
 import type { Problem } from "./types";
@@ -8,6 +8,7 @@ const dialog = ref<HTMLDialogElement>(),
   input = ref<HTMLInputElement>();
 const query = ref(""),
   loading = ref(false),
+  searched = ref(false),
   error = ref(""),
   cursor = ref<string | null>(null);
 const rows = ref<
@@ -20,6 +21,17 @@ const rows = ref<
 >([]);
 let sequence = 0,
   trigger: HTMLElement | undefined;
+watch(query, () => {
+  sequence++;
+  cursor.value = null;
+  rows.value = [];
+  error.value = "";
+  loading.value = false;
+  searched.value = false;
+});
+onUnmounted(() => {
+  sequence++;
+});
 async function open(button?: HTMLElement) {
   trigger = button;
   dialog.value?.showModal();
@@ -35,6 +47,7 @@ async function search(more = false) {
   const current = ++sequence,
     owner = sessionId();
   loading.value = true;
+  searched.value = true;
   error.value = "";
   if (!more) rows.value = [];
   try {
@@ -114,7 +127,11 @@ defineExpose({ open });
       更多结果
     </button>
     <p v-if="query && !loading && !error && !rows.length" class="muted">
-      输入关键词并搜索，匹配结果会显示在这里。
+      {{
+        searched
+          ? "没有找到匹配内容，试试更短的关键词。"
+          : "输入关键词并搜索，匹配结果会显示在这里。"
+      }}
     </p>
   </dialog>
 </template>

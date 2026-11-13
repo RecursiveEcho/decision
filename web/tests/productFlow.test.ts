@@ -246,3 +246,32 @@ it("ignores an old response after the same account signs out and signs back in",
   expect(flow.drafts.value.p1).toBe("new");
   expect(flow.pending.value).toBeNull();
 });
+
+it("appends new messages behind a paused queue instead of bypassing older unsent work", async () => {
+  let writes = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() =>
+      Promise.resolve(
+        json(job(`j${++writes}`, writes === 1 ? "failed" : "succeeded")),
+      ),
+    ),
+  );
+  const { flow } = make();
+  flow.setDraft("p1", "first");
+  await expect(flow.send("p1")).rejects.toThrow("synthetic failure");
+  flow.setDraft("p1", "second");
+  await flow.send("p1", [], true);
+  flow.leaveFinished();
+  flow.setDraft("p1", "third");
+  await flow.send("p1", [], true);
+  expect(writes).toBe(1);
+  expect(flow.queues.value.p1.map((item) => item.content)).toEqual([
+    "second",
+    "third",
+  ]);
+  await flow.continueQueue("p1");
+  await tick();
+  expect(writes).toBe(3);
+  expect(flow.pending.value).toBeNull();
+});

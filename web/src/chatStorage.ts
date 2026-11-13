@@ -36,6 +36,7 @@ export interface PendingChat {
 }
 export interface ChatSession {
   owner: string;
+  unread?: Record<string, boolean>;
   drafts: Record<string, string>;
   pending: PendingChat | null;
   pendings?: Record<string, PendingChat>;

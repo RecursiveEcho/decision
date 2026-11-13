@@ -2,6 +2,7 @@ import "fake-indexeddb/auto";
 import { IDBObjectStore } from "fake-indexeddb";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import {
+  accountId,
   setSession,
   sessionId,
   sessionExpiry,
@@ -15,8 +16,11 @@ import {
   getMedia,
   deleteMedia,
   clearMediaSession,
+  activateMediaSession,
 } from "../src/mediaStorage";
 import { prepareFile, checkFileLimits } from "../src/attachments";
+import * as mediaModule from "../src/mediaStorage";
+import * as attachmentsModule from "../src/attachments";
 
 const ok = () =>
   new Response(
@@ -309,4 +313,240 @@ it("an account switch revokes old original bytes and gives the next account empt
   expect(next.drafts.value).toEqual({});
   expect(next.files.value).toEqual({});
   await expect(getMedia(owner, id, () => true)).rejects.toThrow();
+});
+
+it("cancelling a queued attachment keeps the active message bytes and its recovery snapshot", async () => {
+  let finish!: (r: Response) => void;
+  const fetch = vi.fn((url: string) =>
+    url.endsWith("/messages")
+      ? Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: "active-job",
+              status: "running",
+              mode: "mock",
+              error: null,
+            }),
+          ),
+        )
+      : new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+  );
+  vi.stubGlobal("fetch", fetch);
+  const flow = make();
+  await flow.addFiles("p1", [new File(["active bytes"], "active.txt")]);
+  const activeFile = flow.files.value.p1[0].id;
+  const sending = flow.send("p1");
+  await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+  const activeSnapshot = flow.pendings.value.p1.mediaKey!;
+  await flow.addFiles("p1", [new File(["queued bytes"], "queued.txt")]);
+  const queuedFile = flow.files.value.p1[0].id;
+  await flow.send("p1", [], true);
+  const queued = flow.queues.value.p1[0];
+  flow.cancelQueued("p1", queued.operation!.key);
+  expect(flow.queues.value.p1).toHaveLength(0);
+  expect((await getMedia(sessionId(), activeFile, () => true))[0].name).toBe(
+    "active.txt",
+  );
+  expect(
+    (await getMedia(sessionId(), activeSnapshot, () => true))[0].name,
+  ).toBe("active.txt");
+  await vi.waitFor(async () => {
+    await expect(getMedia(sessionId(), queuedFile, () => true)).rejects.toThrow(
+      "不可用",
+    );
+  });
+  finish(
+    new Response(
+      JSON.stringify({
+        items: [],
+        nextCursor: 1,
+        job: {
+          id: "active-job",
+          status: "succeeded",
+          mode: "mock",
+          error: null,
+        },
+      }),
+    ),
+  );
+  await sending;
+  expect(
+    fetch.mock.calls.filter((call) => call[0].endsWith("/messages")),
+  ).toHaveLength(1);
+});
+
+it("an attachment 401 preserves stable-account drafts, queued messages and local bytes for reauthentication", async () => {
+  const account = {
+    id: "attachment-expiry-fixture",
+    username: "synthetic",
+    role: "user" as const,
+  };
+  setSession({
+    accessToken: "synthetic-a",
+    expiresAt: new Date(Date.now() + 3600000).toISOString(),
+    account,
+  });
+  const owner = accountId();
+  const flow = make();
+  flow.setDraft("new", "unsent draft");
+  await flow.addFiles("new", [new File(["saved bytes"], "draft.txt")]);
+  const fileId = flow.files.value.new[0].id;
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValueOnce(fail())
+      .mockResolvedValueOnce(new Response("", { status: 401 })),
+  );
+  flow.setDraft("p1", "unknown write");
+  await expect(flow.send("p1")).rejects.toThrow();
+  flow.setDraft("p1", "queued follow-up");
+  await flow.send("p1", [], true);
+  await expect(attachmentBlob("remote-preview")).rejects.toThrow("登录已过期");
+  expect(sessionId()).toBe("");
+  setSession({
+    accessToken: "synthetic-b",
+    expiresAt: new Date(Date.now() + 3600000).toISOString(),
+    account,
+  });
+  const restored = make();
+  expect(restored.drafts.value.new).toBe("unsent draft");
+  expect(restored.queues.value.p1[0].content).toBe("queued follow-up");
+  expect(restored.pausedQueues.value.p1).toBe(true);
+  expect((await getMedia(owner, fileId, () => true))[0].name).toBe("draft.txt");
+  await clearMediaSession(owner);
+});
+
+it("freezes submission before delayed IDB reads and retains text, files and preferences edited meanwhile", async () => {
+  const flow = make();
+  flow.setDraft("p1", "submitted text");
+  flow.setThinking("p1", "high");
+  flow.setModel("p1", { provider: "deepseek", model: "original-model" });
+  await flow.addFiles("p1", [new File(["old bytes"], "submitted.txt")]);
+  const originalGet = mediaModule.getMedia;
+  let release!: () => void;
+  const delayed = new Promise<void>((resolve) => (release = resolve));
+  const get = vi
+    .spyOn(mediaModule, "getMedia")
+    .mockImplementationOnce(async (...args) => {
+      await delayed;
+      return originalGet(...args);
+    });
+  const fetch = vi.fn().mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        id: "j-frozen",
+        status: "succeeded",
+        mode: "mock",
+        error: null,
+      }),
+    ),
+  );
+  vi.stubGlobal("fetch", fetch);
+  const sending = flow.send("p1");
+  await vi.waitFor(() => expect(get).toHaveBeenCalled());
+  flow.setDraft("p1", "new draft during submit");
+  flow.setThinking("p1", "off");
+  flow.setModel("p1", { provider: "openai", model: "next-model" });
+  await flow.addFiles("p1", [new File(["new bytes"], "next.txt")]);
+  release();
+  await sending;
+  const body = JSON.parse(fetch.mock.calls[0][1].body);
+  expect(body.content).toBe("submitted text");
+  expect(body.thinking).toBe("high");
+  expect(body.model).toBe("original-model");
+  expect(body.attachments.map((item: { name: string }) => item.name)).toEqual([
+    "submitted.txt",
+  ]);
+  expect(flow.drafts.value.p1).toBe("new draft during submit");
+  expect(flow.files.value.p1.map((file) => file.name)).toEqual(["next.txt"]);
+  expect(flow.thinking.value.p1).toBe("off");
+  expect(flow.models.value.p1.model).toBe("next-model");
+});
+
+it("resets attachment preparation on sign-out without letting the old conversion unlock a new one", async () => {
+  const originalPrepare = attachmentsModule.prepareFile;
+  let finishOld!: () => void, finishNew!: () => void;
+  const oldGate = new Promise<void>((resolve) => (finishOld = resolve)),
+    newGate = new Promise<void>((resolve) => (finishNew = resolve));
+  vi.spyOn(attachmentsModule, "prepareFile")
+    .mockImplementationOnce(async (file) => {
+      await oldGate;
+      return originalPrepare(file);
+    })
+    .mockImplementationOnce(async (file) => {
+      await newGate;
+      return originalPrepare(file);
+    });
+  const flow = make();
+  const oldAdding = flow
+    .addFiles("new", [new File(["old"], "old.txt")])
+    .catch((error) => error);
+  expect(flow.preparing.value).toBe(true);
+  logout();
+  flow.clear();
+  expect(flow.preparing.value).toBe(false);
+  setSession({
+    accessToken: "new",
+    expiresAt: new Date(Date.now() + 3600000).toISOString(),
+  });
+  flow.restore();
+  const newAdding = flow.addFiles("new", [new File(["new"], "new.txt")]);
+  expect(flow.preparing.value).toBe(true);
+  finishOld();
+  await oldAdding;
+  expect(flow.preparing.value).toBe(true);
+  finishNew();
+  await newAdding;
+  expect(flow.preparing.value).toBe(false);
+  expect(flow.files.value.new.map((file) => file.name)).toEqual(["new.txt"]);
+});
+
+it("keeps an attachment prepared during first-message acceptance with the newly created conversation", async () => {
+  let accepted!: (response: Response) => void;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => new Promise<Response>((resolve) => (accepted = resolve))),
+  );
+  const flow = make();
+  flow.setDraft("new", "first message");
+  const sending = flow.send(null);
+  await vi.waitFor(() => expect(accepted).toBeTypeOf("function"));
+  const originalPrepare = attachmentsModule.prepareFile;
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => (finish = resolve));
+  vi.spyOn(attachmentsModule, "prepareFile").mockImplementationOnce(
+    async (file) => {
+      await gate;
+      return originalPrepare(file);
+    },
+  );
+  const adding = flow.addFiles("new", [new File(["next bytes"], "next.txt")]);
+  accepted(ok());
+  await sending;
+  finish();
+  await adding;
+  expect(flow.files.value.p1.map((file) => file.name)).toEqual(["next.txt"]);
+  expect(flow.files.value.new).toBeUndefined();
+});
+
+it("does not let an older reactivation undo a second sign-out while IDB cleanup is pending", async () => {
+  const owner = "rapid-relogin-fixture",
+    file = await prepareFile(new File(["synthetic"], "fixture.txt"));
+  await putMedia(owner, file.id, [file], Date.now() + 3600000, () => true);
+  const first = clearMediaSession(owner);
+  activateMediaSession(owner);
+  const second = clearMediaSession(owner);
+  await Promise.all([first, second]);
+  await expect(
+    putMedia(owner, file.id, [file], Date.now() + 3600000, () => true),
+  ).rejects.toThrow("会话已结束");
+  activateMediaSession(owner);
+  await putMedia(owner, file.id, [file], Date.now() + 3600000, () => true);
+  expect((await getMedia(owner, file.id, () => true))[0].name).toBe(
+    "fixture.txt",
+  );
+  await clearMediaSession(owner);
 });

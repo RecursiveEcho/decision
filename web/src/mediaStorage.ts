@@ -19,6 +19,7 @@ const DB = "decision-chat-media";
 const STORE = "media";
 const revoked = new Set<string>();
 const clearing = new Map<string, Promise<void>>();
+const revocationVersions = new Map<string, number>();
 const transactions = new Map<string, Set<IDBTransaction>>();
 let database: Promise<IDBDatabase> | undefined;
 const storageError = () =>
@@ -149,6 +150,7 @@ export async function deleteMedia(
 export function clearMediaSession(owner: string): Promise<void> {
   if (!owner) return Promise.resolve();
   revoked.add(owner);
+  revocationVersions.set(owner, (revocationVersions.get(owner) || 0) + 1);
   for (const tx of transactions.get(owner) || []) {
     try {
       tx.abort();
@@ -156,6 +158,7 @@ export function clearMediaSession(owner: string): Promise<void> {
       /* Already complete. */
     }
   }
+  if (clearing.has(owner)) return clearing.get(owner)!;
   if (typeof indexedDB === "undefined") return Promise.resolve();
   const cleanup = db()
     .then(
@@ -187,11 +190,17 @@ export function clearMediaSession(owner: string): Promise<void> {
   return cleanup;
 }
 export function activateMediaSession(owner: string) {
-  const pending = clearing.get(owner);
-  if (pending) void pending.then(() => revoked.delete(owner)).catch(() => {});
+  const pending = clearing.get(owner),
+    version = revocationVersions.get(owner);
+  if (pending)
+    void pending
+      .then(() => {
+        if (revocationVersions.get(owner) === version) revoked.delete(owner);
+      })
+      .catch(() => {});
   else revoked.delete(owner);
 }
-// Only expired login sessions are swept. Other tabs' valid sessions are untouched.
+// Draft attachments have their own lifetime, independent of short-lived login tokens.
 export async function purgeExpiredMedia() {
   if (typeof indexedDB === "undefined") return;
   const database = await db();

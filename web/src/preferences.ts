@@ -61,9 +61,30 @@ export function readWorkspace(): {
   scroll?: Record<string, number>;
 } {
   try {
-    return JSON.parse(
+    const value = JSON.parse(
       localStorage.getItem(`decision.workspace:${accountId()}`) || "{}",
     );
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return {
+      ...(typeof value.selected === "string"
+        ? { selected: value.selected }
+        : {}),
+      ...(typeof value.collapsed === "boolean"
+        ? { collapsed: value.collapsed }
+        : {}),
+      ...(value.scroll && typeof value.scroll === "object"
+        ? {
+            scroll: Object.fromEntries(
+              Object.entries(value.scroll).filter(
+                ([, position]) =>
+                  typeof position === "number" &&
+                  Number.isFinite(position) &&
+                  position >= 0,
+              ),
+            ) as Record<string, number>,
+          }
+        : {}),
+    };
   } catch {
     return {};
   }

@@ -215,7 +215,7 @@ export async function attachmentBlob(id: string): Promise<Blob> {
   if (owner !== sessionId())
     throw new ApiError("会话已结束，停止读取附件。", 499);
   if (response.status === 401) {
-    logout();
+    logout(false);
     throw new ApiError("登录已过期，请重新登录。", 401);
   }
   if (!response.ok)
