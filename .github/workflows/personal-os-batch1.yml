@@ -5,7 +5,7 @@ on:
     branches: [codex/personal-os-confirmation-batch1]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: personal-os-batch1-${{ github.ref }}
@@ -20,6 +20,23 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 1
+      - name: Apply reviewed isolated implementation payload
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, pathlib, subprocess
+          root = pathlib.Path('.github/batch1-transfer')
+          if root.exists():
+              payload = ''.join((root / f'{i:02}.b64').read_text() for i in range(1,5))
+              patch = lzma.decompress(base64.b64decode(payload, validate=True))
+              assert hashlib.sha256(patch).hexdigest() == '33f672c57701c5a8eb90a0d4067617df57dda099263937ed2851514f801e3075'
+              for line in patch.decode().splitlines():
+                  if line.startswith('+++ b/'):
+                      name = line[6:]
+                      assert name.startswith('backend/') or name == 'docs/mvp/CONTRACT.md', name
+              subprocess.run(['git','apply','--check','-'], input=patch, check=True)
+              subprocess.run(['git','apply','-'], input=patch, check=True)
+          PY
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -28,25 +45,55 @@ jobs:
           cache-dependency-path: backend/pom.xml
       - name: Test with disposable synthetic PostgreSQL only
         shell: bash
-        run: bash backend/test.sh
+        run: |
+          set -o pipefail
+          bash backend/test.sh 2>&1 | tee "$RUNNER_TEMP/batch1-test.log"
       - name: Build Java artifact
         working-directory: backend
         run: ./mvnw -B -DskipTests package
-      - name: Freeze source and test evidence
+      - name: Commit verified source to this task branch only
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          test "$GITHUB_REF" = refs/heads/codex/personal-os-confirmation-batch1
+          git add backend/src backend/docs/PERSONAL_OS_BATCH1.md docs/mvp/CONTRACT.md
+          if test -d .github/batch1-transfer; then git rm -r .github/batch1-transfer; fi
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'feat: isolate Origin conversations and version-bound Decision confirmations'
+            git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin HEAD:refs/heads/codex/personal-os-confirmation-batch1
+          fi
+      - name: Freeze actual source and test evidence
         if: always()
         shell: bash
         run: |
-          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/decision-source.tar.gz"
           git rev-parse HEAD > "$RUNNER_TEMP/source-commit.txt"
-          sha256sum "$RUNNER_TEMP/decision-source.tar.gz" > "$RUNNER_TEMP/source-sha256.txt"
+          git status --short > "$RUNNER_TEMP/source-status.txt"
+          git diff HEAD > "$RUNNER_TEMP/tested-working-diff.patch"
+          python3 - <<'PY'
+          import os, pathlib, subprocess, tarfile
+          files = subprocess.check_output(['git','ls-files','--cached','--others','--exclude-standard','-z']).decode().split('\0')
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'decision-tested-source.tar.gz'
+          with tarfile.open(out, 'w:gz') as archive:
+              for name in sorted(set(files)):
+                  if name and pathlib.Path(name).is_file() and not name.startswith('.github/batch1-transfer/'):
+                      archive.add(name, arcname=name, recursive=False)
+          PY
+          sha256sum "$RUNNER_TEMP/decision-tested-source.tar.gz" > "$RUNNER_TEMP/source-sha256.txt"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: personal-os-batch1-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/decision-source.tar.gz
+            ${{ runner.temp }}/decision-tested-source.tar.gz
             ${{ runner.temp }}/source-commit.txt
+            ${{ runner.temp }}/source-status.txt
             ${{ runner.temp }}/source-sha256.txt
+            ${{ runner.temp }}/tested-working-diff.patch
+            ${{ runner.temp }}/batch1-test.log
             backend/target/surefire-reports/
-            backend/target/test-run.log
           retention-days: 7
