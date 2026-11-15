@@ -245,7 +245,7 @@ class OriginContinuationTest extends AdminFixture {
   @Test void reopenedCardsRemainAccountScoped() throws Exception {
     String sid=session();newProblem(sid);
     String name="member_"+Json.id().replace("-","").substring(0,12);
-    String other=req(post("/api/v1/auth/register"),null,Json.obj("username",name,"password","synthetic-member-password"),201).path("accessToken").asText();
+    String other=req(post("/api/v1/auth/register").header("Idempotency-Key",Json.id()),null,Json.obj("username",name,"password","synthetic-member-password"),201).path("accessToken").asText();
     req(get("/api/v1/origin/sessions/"+sid),other,null,404);
     JsonNode sessions=req(get("/api/v1/origin/sessions"),other,null,200);
     assertTrue(sessions.path("items").isEmpty());
