@@ -30,12 +30,14 @@ jobs:
               payload = ''.join((root / f'{i:02}.b64').read_text() for i in range(1,5))
               patch = lzma.decompress(base64.b64decode(payload, validate=True))
               assert hashlib.sha256(patch).hexdigest() == '33f672c57701c5a8eb90a0d4067617df57dda099263937ed2851514f801e3075'
-              for line in patch.decode().splitlines():
-                  if line.startswith('+++ b/'):
-                      name = line[6:]
-                      assert name.startswith('backend/') or name == 'docs/mvp/CONTRACT.md', name
-              subprocess.run(['git','apply','--check','-'], input=patch, check=True)
-              subprocess.run(['git','apply','-'], input=patch, check=True)
+              patches = [patch] + [p.read_bytes() for p in sorted(root.glob('fix-*.patch'))]
+              for patch in patches:
+                  for line in patch.decode().splitlines():
+                      if line.startswith('+++ b/'):
+                          name = line[6:]
+                          assert name.startswith('backend/') or name == 'docs/mvp/CONTRACT.md', name
+                  subprocess.run(['git','apply','--check','-'], input=patch, check=True)
+                  subprocess.run(['git','apply','-'], input=patch, check=True)
           PY
       - uses: actions/setup-java@v4
         with:

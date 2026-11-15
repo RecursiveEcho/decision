@@ -1,0 +1,56 @@
+diff --git a/backend/src/main/java/dev/decision/Store.java b/backend/src/main/java/dev/decision/Store.java
+--- a/backend/src/main/java/dev/decision/Store.java
++++ b/backend/src/main/java/dev/decision/Store.java
+@@ -131,7 +131,7 @@
+       if (error.status == 404) throw new ApiError(409, "CONFIRMATION_STALE", "档案已失效，请刷新并重新确认");
+       throw error;
+     }
+-    if (!Json.canonical(current).equals(Json.canonical(expected)))
++    if (!Json.canonical(current).toString().equals(Json.canonical(expected).toString()))
+       throw new ApiError(409, "CONFIRMATION_STALE", "档案或证据已变化，请刷新并重新确认");
+   }
+ 
+diff --git a/backend/src/main/java/dev/decision/OriginConfirmations.java b/backend/src/main/java/dev/decision/OriginConfirmations.java
+--- a/backend/src/main/java/dev/decision/OriginConfirmations.java
++++ b/backend/src/main/java/dev/decision/OriginConfirmations.java
+@@ -74,7 +74,7 @@
+   }
+ 
+   void requireExecutionContext(String id, JsonNode expected) {
+-    if (!Json.canonical(executionContext(id)).equals(Json.canonical(expected)))
++    if (!Json.canonical(executionContext(id)).toString().equals(Json.canonical(expected).toString()))
+       throw new ApiError(409, "CONFIRMATION_STALE", "决定或相关证据已变化，请重新确认授权");
+   }
+ 
+@@ -166,7 +166,7 @@
+         || body.path("actualResult").toString().length() > 32000)
+       throw new ApiError(400, "EXECUTION_RESULT_REQUIRED", "必须提供执行器的实际结果");
+     if (Set.of("succeeded", "failed", "unknown").contains(a.path("state").asText())) {
+-      if (!Json.canonical(a.path("result")).equals(Json.canonical(body)))
++      if (!Json.canonical(a.path("result")).toString().equals(Json.canonical(body).toString()))
+         throw new ApiError(409, "EXECUTION_RESULT_CONFLICT", "已有回执不可被不同结果覆盖");
+       return a;
+     }
+diff --git a/backend/src/main/java/dev/decision/OriginChat.java b/backend/src/main/java/dev/decision/OriginChat.java
+--- a/backend/src/main/java/dev/decision/OriginChat.java
++++ b/backend/src/main/java/dev/decision/OriginChat.java
+@@ -165,6 +165,7 @@
+       String text = msg.path("content").asText();
+       ArrayNode blocks = Json.arr().add(Json.obj("type", "text", "text", text.isBlank() ? "请阅读所附资料。" : text));
+       chars += text.length();
++      if (chars > 128000) throw new ApiError(413, "CONTEXT_LIMIT", "历史超出本轮读取范围，请新建会话");
+       var files = s.db.queryForList("SELECT id::text,bytes,metadata::text,parsed::text FROM origin_attachments"
+           + " WHERE account_id=?::uuid AND message_id=?::uuid ORDER BY position", AccountScope.id(), id.asText());
+       for (var file : files) {
+diff --git a/backend/src/test/java/dev/decision/OriginBoundaryTest.java b/backend/src/test/java/dev/decision/OriginBoundaryTest.java
+--- a/backend/src/test/java/dev/decision/OriginBoundaryTest.java
++++ b/backend/src/test/java/dev/decision/OriginBoundaryTest.java
+@@ -269,7 +269,7 @@
+     req(get("/api/v1/origin/attachments/"+fid),member,null,404);
+     req(post("/api/v1/origin/proposals/"+proposal.path("id").asText()+"/commit").header("Idempotency-Key",proposal.path("requestId").asText()),member,
+         Json.obj("digest",proposal.path("digest"),"requestId",proposal.path("requestId")),404);
+-    String device=auth.token("device:"+Json.id(),Instant.now().plusSeconds(300));
++    String device=postJson("/devices",Json.obj("name","synthetic-origin-device"),201).path("deviceToken").asText();
+     req(get("/api/v1/origin/sessions/"+session),device,null,403);
+     assertEquals(0,records("problem"));
+   }
