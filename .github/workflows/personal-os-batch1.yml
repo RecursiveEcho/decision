@@ -12,25 +12,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  source-snapshot:
+  isolated-backend:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
           fetch-depth: 1
-      - name: Archive tracked source only
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+          cache-dependency-path: backend/pom.xml
+      - name: Test with disposable synthetic PostgreSQL only
+        shell: bash
+        run: bash backend/test.sh
+      - name: Build Java artifact
+        working-directory: backend
+        run: ./mvnw -B -DskipTests package
+      - name: Freeze source and test evidence
+        if: always()
         shell: bash
         run: |
           git archive --format=tar.gz HEAD > "$RUNNER_TEMP/decision-source.tar.gz"
           git rev-parse HEAD > "$RUNNER_TEMP/source-commit.txt"
           sha256sum "$RUNNER_TEMP/decision-source.tar.gz" > "$RUNNER_TEMP/source-sha256.txt"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: decision-source-${{ github.sha }}
+          name: personal-os-batch1-${{ github.sha }}
           path: |
             ${{ runner.temp }}/decision-source.tar.gz
             ${{ runner.temp }}/source-commit.txt
             ${{ runner.temp }}/source-sha256.txt
+            backend/target/surefire-reports/
+            backend/target/test-run.log
           retention-days: 7
