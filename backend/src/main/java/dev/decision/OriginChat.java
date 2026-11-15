@@ -79,9 +79,25 @@ class OriginChat {
     ObjectNode current = o.get("session", session);
     ArrayNode messages = Json.arr();
     for (ObjectNode msg : o.list("message", session)) {
+      // Keep original references even when an attachment is no longer available. A missing
+      // row must not silently turn a file-bearing message into an ordinary text message.
+      Map<String, JsonNode> available = new LinkedHashMap<>();
+      s.db.query("SELECT id::text,metadata::text FROM origin_attachments WHERE account_id=?::uuid"
+              + " AND session_id=?::uuid AND message_id=?::uuid ORDER BY position",
+          rs -> { available.put(rs.getString(1), Json.parse(rs.getString(2))); },
+          AccountScope.id(), session, msg.path("id").asText());
       ArrayNode attachments = Json.arr();
-      s.db.query("SELECT metadata::text FROM origin_attachments WHERE account_id=?::uuid AND message_id=?::uuid ORDER BY position",
-          rs -> { attachments.add(Json.parse(rs.getString(1))); }, AccountScope.id(), msg.path("id").asText());
+      for (JsonNode reference : msg.path("attachments")) {
+        JsonNode metadata = available.get(reference.path("id").asText());
+        if (metadata != null) attachments.add(metadata);
+        else {
+          ObjectNode missing = (ObjectNode) reference.deepCopy();
+          missing.put("status", "unavailable");
+          missing.set("error", new ApiError(404, "ATTACHMENT_REFERENCE_UNAVAILABLE",
+              "附件引用已失效，原始内容当前不可读取").detail());
+          attachments.add(missing);
+        }
+      }
       msg.set("attachments", attachments);
       messages.add(msg);
     }
@@ -89,7 +105,10 @@ class OriginChat {
     for (ObjectNode g : o.list("generation", session)) {
       g.remove("modelSnapshot"); generations.add(g);
     }
-    return Json.obj("session", current, "messages", messages, "generations", generations);
+    // Reopening a conversation restores confirmation cards and separate execution receipts.
+    // Reading history must not commit a pending proposal or turn an authorization into success.
+    return Json.obj("session", current, "messages", messages, "generations", generations,
+        "proposals", o.list("proposal", session), "executions", o.list("authorization", session));
   }
 
   Attachments.Binary attachment(String id) {
@@ -167,7 +186,14 @@ class OriginChat {
       chars += text.length();
       if (chars > 128000) throw new ApiError(413, "CONTEXT_LIMIT", "历史超出本轮读取范围，请新建会话");
       var files = s.db.queryForList("SELECT id::text,bytes,metadata::text,parsed::text FROM origin_attachments"
-          + " WHERE account_id=?::uuid AND message_id=?::uuid ORDER BY position", AccountScope.id(), id.asText());
+          + " WHERE account_id=?::uuid AND session_id=?::uuid AND message_id=?::uuid ORDER BY position",
+          AccountScope.id(), g.path("sessionId").asText(), id.asText());
+      List<String> expectedFiles = new ArrayList<>();
+      msg.path("attachments").forEach(a -> expectedFiles.add(a.path("id").asText()));
+      List<String> actualFiles = files.stream().map(f -> (String) f.get("id")).toList();
+      if (!expectedFiles.equals(actualFiles))
+        throw new ApiError(409, "ATTACHMENT_REFERENCE_UNAVAILABLE",
+            "历史附件引用已失效，本次未调用模型；请恢复附件或在新会话中重新提供资料");
       for (var file : files) {
         String fid = (String) file.get("id");
         ObjectNode meta = (ObjectNode) Json.parse((String) file.get("metadata"));
