@@ -1,0 +1,28 @@
+name: Offline PostgreSQL test tools
+on:
+  push:
+    branches: [codex/progress-build-support]
+    paths: [.github/workflows/offline-postgres-test-tools.yml]
+permissions:
+  contents: read
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download public test binaries only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pgtools"
+          cd "$RUNNER_TEMP/pgtools"
+          url=https://repo.maven.apache.org/maven2/io/zonky/test/postgres/embedded-postgres-binaries-linux-amd64/16.4.0/embedded-postgres-binaries-linux-amd64-16.4.0.jar
+          curl --fail --silent --show-error --location "$url" -o postgres-binaries.jar
+          curl --fail --silent --show-error --location "$url.sha1" -o upstream.sha1
+          test "$(sha1sum postgres-binaries.jar | cut -d' ' -f1)" = "$(cat upstream.sha1)"
+          sha256sum postgres-binaries.jar > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: offline-postgres-test-tools
+          path: ${{ runner.temp }}/pgtools/
+          retention-days: 3
