@@ -54,7 +54,8 @@ class ApiFilter extends OncePerRequestFilter {
       int limit =
           req.getMethod().equals("POST")
                   && (p.equals("/api/v1/conversations")
-                      || p.matches("/api/v1/problems/[0-9a-fA-F-]+/messages"))
+                      || p.matches("/api/v1/problems/[0-9a-fA-F-]+/messages")
+                      || p.matches("/api/v1/origin/sessions/[0-9a-fA-F-]+/messages"))
               ? 24 * 1024 * 1024
               : 1_048_576;
       if (req.getContentLengthLong() > limit) throw new ApiError(413, "BODY_TOO_LARGE", "请求超过大小限制");

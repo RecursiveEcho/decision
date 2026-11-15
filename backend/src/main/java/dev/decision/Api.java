@@ -235,6 +235,11 @@ class Api {
     return d.readProblem(id);
   }
 
+  @GetMapping("/problems/{id}/confirmation-context")
+  ObjectNode confirmationContext(@PathVariable String id) {
+    return s.write(() -> s.decisionContext(id));
+  }
+
   @DeleteMapping("/problems/{id}")
   ResponseEntity<?> deleteProblem(@PathVariable String id) {
     s.write(

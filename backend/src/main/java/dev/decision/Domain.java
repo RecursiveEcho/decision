@@ -38,20 +38,15 @@ class Domain {
   }
 
   ObjectNode problem(JsonNode b) {
-    return s.create(
-        "problem",
-        null,
-        Json.obj(
-            "status",
-            "active",
-            "title",
-            Json.required(b, "title", 300),
-            "goal",
-            Json.required(b, "goal", 4000),
-            "constraints",
-            Json.strings(b, "constraints"),
-            "unknowns",
-            Json.strings(b, "unknowns")));
+    return s.create("problem", null, problemDraft(b));
+  }
+
+  /** Validation only: preparing an Origin proposal must not create a business record. */
+  ObjectNode problemDraft(JsonNode b) {
+    return Json.obj(
+        "status", "active", "title", Json.required(b, "title", 300),
+        "goal", Json.required(b, "goal", 4000),
+        "constraints", Json.strings(b, "constraints"), "unknowns", Json.strings(b, "unknowns"));
   }
 
   ObjectNode readProblem(String id) {
@@ -570,28 +565,24 @@ class Domain {
 
   ObjectNode decision(JsonNode b) {
     String p = problemId(b);
-    return s.create(
-        "decision",
-        p,
-        Json.obj(
-            "problemId",
-            p,
-            "choice",
-            Json.required(b, "choice", 4000),
-            "rationale",
-            Json.required(b, "rationale", 10000),
-            "expectedOutcome",
-            Json.required(b, "expectedOutcome", 4000),
-            "evidence",
-            evidence.validate(b.get("evidence"), p, true, null),
-            "confirmedAt",
-            Json.now(),
-            "reviewAt",
-            Json.datetime(b, "reviewAt", false),
-            "revision",
-            1,
-            "reviews",
-            Json.arr()));
+    // Existing clients remain compatible; Origin always supplies a frozen context.
+    if (b.has("expectedContext")) s.requireDecisionContext(p, b.get("expectedContext"));
+    ObjectNode draft = decisionDraft(b);
+    draft.put("confirmedAt", Json.now());
+    draft.put("revision", 1);
+    draft.set("reviews", Json.arr());
+    return s.create("decision", p, draft);
+  }
+
+  /** Pure validation, shared by proposal preparation and the final transaction. */
+  ObjectNode decisionDraft(JsonNode b) {
+    String p = problemId(b);
+    return Json.obj(
+        "problemId", p, "choice", Json.required(b, "choice", 4000),
+        "rationale", Json.required(b, "rationale", 10000),
+        "expectedOutcome", Json.required(b, "expectedOutcome", 4000),
+        "evidence", evidence.validate(b.get("evidence"), p, true, null),
+        "reviewAt", Json.datetime(b, "reviewAt", false));
   }
 
   ObjectNode review(String id, JsonNode b) {

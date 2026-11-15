@@ -36,3 +36,5 @@ app:
   wiki-public-url: ${WIKI_PUBLIC_URL:}
   wiki-locale: ${WIKI_LOCALE:zh}
   worker-enabled: ${APP_WORKER_ENABLED:true}
+  origin-worker-enabled: ${ORIGIN_WORKER_ENABLED:false}
+  origin-executor-key: ${ORIGIN_EXECUTOR_KEY:}

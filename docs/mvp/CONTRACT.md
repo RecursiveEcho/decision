@@ -203,3 +203,21 @@ A 至少建立 problems、sources、messages、jobs、memories（含 revision hi
 - 整理任务沿用现有有界知识快照、模型、来源核验、目标版本和 pending 提案机制。仅命中建议的回合额外调用一次整理模型；Job `succeeded` 时其现有 `result.proposalId` 指向草稿，`skip`、失败或过期时不显示确认动作，也不影响已成功的聊天回答。聊天消息和建议均可刷新恢复；旧 Job 不能把已更正、忘记或删除的内容当作有效来源。
 - 网页在产生建议的助手回答下方显示简短、可展开的新增/合并/修订草稿及与旧内容的变化，提供确认/暂不保存。确认和略过继续调用现有 `/knowledge-proposals/{id}/accept|dismiss`，复用幂等、409过期与来源版本校验。确认前正式知识为零写入；新一轮讨论若使草稿过期，明确提示重新整理。保留手动入口作为异常恢复通道，但正常流程由聊天主动发起。
 - GET `/knowledge-proposals` 列表和单条详情对 pending 提案附加只读 `requiresRefresh:boolean`，用现有指纹与目标版本判断当前是否可确认；不写回记录。前端在 true 时隐藏确认动作，提示继续讨论后可等待新建议或明确重新整理。真正的 accept 仍在事务内复核，不依赖前端字段保证有效性。
+
+## Personal OS first implementation slice (isolated development)
+
+The independent Origin API and confirmation contract are specified in
+`backend/docs/PERSONAL_OS_BATCH1.md`. Ordinary Origin conversations never call
+`POST /conversations`, never create a Decision problem implicitly and never run
+legacy automatic decision capture. Existing clients retain their current API.
+
+New source version envelope: `GET /problems/{id}/confirmation-context` returns
+`{problemId,problemRevision,sourceRevisions:{sourceId:revision}}`. The optional
+`expectedContext` on `POST /decisions` is checked in the existing write transaction.
+Origin's immutable proposal commit always enforces that context, account, exact
+parameters and the proposal's stable request key. Creating a problem, confirming
+a final decision and authorizing execution are separate operations.
+
+V11 adds independent Origin storage and monotonic internal row versions. No existing
+database upgrade is authorized by this source change. Progress integration remains
+blocked on source availability; no preview path may call its mutating report API.

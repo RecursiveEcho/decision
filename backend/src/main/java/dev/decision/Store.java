@@ -103,6 +103,38 @@ class Store {
         q + " ORDER BY created_at,id", (rs, i) -> (ObjectNode) Json.parse(rs.getString(1)), args);
   }
 
+  /** All callers that will write must invoke this under write(), together with the write. */
+  long recordRevision(String kind, String id) {
+    get(kind, id); // Includes account and deletion checks; never expose another account's revision.
+    return db.queryForObject(
+        "SELECT pos_revision FROM records WHERE account_id=?::uuid AND id=?::uuid AND kind=? AND NOT deleted",
+        Long.class, AccountScope.id(), id, kind);
+  }
+
+  ObjectNode decisionContext(String problemId) {
+    long revision = recordRevision("problem", problemId);
+    ObjectNode sources = Json.obj();
+    db.query(
+        "SELECT id::text,pos_revision FROM records WHERE account_id=?::uuid AND problem_id=?::uuid"
+            + " AND kind='source' AND NOT deleted ORDER BY id",
+        rs -> { sources.put(rs.getString(1), rs.getLong(2)); },
+        AccountScope.id(), problemId);
+    return Json.obj("problemId", problemId, "problemRevision", revision, "sourceRevisions", sources);
+  }
+
+  void requireDecisionContext(String problemId, JsonNode expected) {
+    if (expected == null || !expected.isObject())
+      throw new ApiError(400, "CONTEXT_REQUIRED", "请先读取档案及证据版本");
+    ObjectNode current;
+    try { current = decisionContext(problemId); }
+    catch (ApiError error) {
+      if (error.status == 404) throw new ApiError(409, "CONFIRMATION_STALE", "档案已失效，请刷新并重新确认");
+      throw error;
+    }
+    if (!Json.canonical(current).toString().equals(Json.canonical(expected).toString()))
+      throw new ApiError(409, "CONFIRMATION_STALE", "档案或证据已变化，请刷新并重新确认");
+  }
+
   long version() {
     return db.queryForObject(
         "SELECT revision FROM context_version WHERE account_id=?::uuid",
